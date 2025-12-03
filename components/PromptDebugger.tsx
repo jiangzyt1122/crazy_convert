@@ -52,6 +52,10 @@ export const PromptDebugger: React.FC<PromptDebuggerProps> = ({ task, lang }) =>
   const [versionName, setVersionName] = useState('V3');
   const [versionDescription, setVersionDescription] = useState('');
   const [isVersionListOpen, setIsVersionListOpen] = useState(false);
+  const [isCompareManageOpen, setIsCompareManageOpen] = useState(false);
+  const [compareSelectedIndices, setCompareSelectedIndices] = useState<number[]>(
+    () => (MOCK_VERSIONS.length > 0 ? [0] : [])
+  );
   const [lastAutoSaveAt, setLastAutoSaveAt] = useState<string | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<'json' | 'csv'>('json');
@@ -68,12 +72,20 @@ export const PromptDebugger: React.FC<PromptDebuggerProps> = ({ task, lang }) =>
   const generationTimeoutRef = useRef<number | null>(null);
   const [expandedResultIndex, setExpandedResultIndex] = useState<number | null>(null);
 
+  useEffect(() => {
+    setCompareSelectedIndices(prev =>
+      prev.filter((idx) => idx >= 0 && idx < versions.length)
+    );
+  }, [versions.length]);
+
   const t = TRANSLATIONS[lang];
 
   // Regex to find {{variable}}
   useEffect(() => {
     const regex = /\{\{([^}]+)\}\}/g;
-    const matches = [...promptContent.matchAll(regex)].map(m => m[1].trim());
+    const matches = [...promptContent.matchAll(regex)]
+      .map(m => (m[1] || '').trim())
+      .filter(name => !!name);
     setDetectedVars([...new Set(matches)]);
   }, [promptContent]);
 
@@ -916,6 +928,115 @@ export const PromptDebugger: React.FC<PromptDebuggerProps> = ({ task, lang }) =>
     );
   };
 
+  const CompareManageModal = () => {
+    if (!isCompareManageOpen) return null;
+
+    const selectedIndices = compareSelectedIndices.length
+      ? compareSelectedIndices
+      : [currentVersionIndex].filter(idx => idx >= 0 && idx < versions.length);
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+        <div className="bg-white w-[520px] max-h-[80vh] rounded-2xl shadow-2xl p-6 flex flex-col">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-slate-900">
+              {lang === 'en' ? 'Select versions to compare' : '请选择想要对比的版本'}
+            </h3>
+            <button
+              onClick={() => setIsCompareManageOpen(false)}
+              className="p-1 rounded-full hover:bg-slate-100 text-slate-400"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-3">
+            {versions.map((ver, idx) => {
+              const isActive = idx === currentVersionIndex;
+              const badgeIndex = selectedIndices.indexOf(idx);
+              const isSelected = badgeIndex !== -1;
+
+              return (
+                <button
+                  type="button"
+                  key={ver.id}
+                  onClick={() => {
+                    setCompareSelectedIndices(prev => {
+                      const exists = prev.includes(idx);
+                      if (exists) {
+                        const next = prev.filter(i => i !== idx);
+                        return next.length ? next : [idx];
+                      }
+                      return [...prev, idx];
+                    });
+                  }}
+                  className={`w-full text-left rounded-xl border px-4 py-3 transition-colors ${
+                    isSelected
+                      ? 'border-blue-500 bg-blue-50 hover:bg-blue-100'
+                      : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-slate-900">{ver.version}</span>
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-full ${
+                          isActive
+                            ? 'bg-blue-500 text-white'
+                            : 'bg-slate-300 text-slate-700'
+                        }`}
+                      >
+                        {isActive
+                          ? lang === 'en'
+                            ? 'Editable'
+                            : '可编辑'
+                          : lang === 'en'
+                          ? 'Read only'
+                          : '只读'}
+                      </span>
+                    </div>
+                    {isSelected && (
+                      <span className="w-5 h-5 rounded-full bg-blue-500 text-white text-[11px] flex items-center justify-center">
+                        {badgeIndex + 1}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-500 mb-1">
+                    {lang === 'en' ? 'Description:' : '版本描述:'}{' '}
+                    {ver.description ||
+                      (lang === 'en' ? 'My version description' : '我的版本描述')}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {lang === 'en' ? 'Last edited at ' : '最近编辑于 '}
+                    {ver.timestamp}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex justify-end gap-3 mt-4">
+            <button
+              onClick={() => setIsCompareManageOpen(false)}
+              className="px-4 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
+            >
+              {lang === 'en' ? 'Cancel' : '取消'}
+            </button>
+            <button
+              onClick={() => {
+                setIsCompareManageOpen(false);
+                setIsComparing(true);
+              }}
+              className="px-5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 shadow-sm"
+            >
+              {lang === 'en' ? 'Confirm' : '确定'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const ResultContent = ({ text }: { text: string }) => {
     const [showThinking, setShowThinking] = useState(true);
 
@@ -1137,11 +1258,19 @@ export const PromptDebugger: React.FC<PromptDebuggerProps> = ({ task, lang }) =>
       );
     };
 
+    const activeCompareIndices =
+      compareSelectedIndices.length > 0
+        ? compareSelectedIndices
+        : versions.map((_, idx) => idx);
+
     return (
       <div className="flex flex-1 flex-col bg-slate-50 relative">
         <div className="flex-1 overflow-x-auto overflow-y-auto pt-4 px-4 pb-28">
           <div className="flex min-h-full">
-            {versions.map((ver, idx) => (
+            {activeCompareIndices.map((idx) => {
+              const ver = versions[idx];
+              if (!ver) return null;
+              return (
               <div key={ver.id} className="flex items-stretch">
                 <div
                   className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col"
@@ -1341,7 +1470,7 @@ export const PromptDebugger: React.FC<PromptDebuggerProps> = ({ task, lang }) =>
                   </div>
                 )}
               </div>
-            ))}
+            )})}
           </div>
         </div>
 
@@ -1397,6 +1526,7 @@ export const PromptDebugger: React.FC<PromptDebuggerProps> = ({ task, lang }) =>
       <SaveVersionModal />
       <VersionListModal />
       <ExportModal />
+      <CompareManageModal />
 
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-3 border-b border-slate-200 bg-white shrink-0 z-10 shadow-sm">
@@ -1425,24 +1555,28 @@ export const PromptDebugger: React.FC<PromptDebuggerProps> = ({ task, lang }) =>
               </span>
             </h2>
           </div>
-          <div className="h-6 w-px bg-slate-200 mx-2"></div>
-          <div className="flex items-center space-x-2">
-             <button
-               onClick={() => setIsVersionListOpen(true)}
-               className="flex items-center space-x-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm text-slate-600 hover:bg-slate-100 transition-colors"
-             >
-                <History className="w-4 h-4 text-slate-400" />
-                <span>{MOCK_VERSIONS[currentVersionIndex]?.version || 'V1'}</span>
-                <ChevronDown className="w-3 h-3 ml-1" />
-             </button>
-             <button
-               onClick={() => setIsSaveModalOpen(true)}
-               className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600 hover:bg-slate-100 transition-colors flex items-center space-x-1"
-             >
-               <Save className="w-3 h-3" />
-               <span>{lang === 'en' ? 'Save' : '保存'}</span>
-             </button>
-          </div>
+          {!isComparing && (
+            <>
+              <div className="h-6 w-px bg-slate-200 mx-2"></div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => setIsVersionListOpen(true)}
+                  className="flex items-center space-x-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded text-sm text-slate-600 hover:bg-slate-100 transition-colors"
+                >
+                  <History className="w-4 h-4 text-slate-400" />
+                  <span>{versions[currentVersionIndex]?.version || 'V1'}</span>
+                  <ChevronDown className="w-3 h-3 ml-1" />
+                </button>
+                <button
+                  onClick={() => setIsSaveModalOpen(true)}
+                  className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600 hover:bg-slate-100 transition-colors flex items-center space-x-1"
+                >
+                  <Save className="w-3 h-3" />
+                  <span>{lang === 'en' ? 'Save' : '保存'}</span>
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex items-center space-x-4">
@@ -1463,12 +1597,28 @@ export const PromptDebugger: React.FC<PromptDebuggerProps> = ({ task, lang }) =>
           </button>
           {/* Compare Toggle in Header */}
           <button 
-            onClick={() => setIsComparing(!isComparing)}
+            onClick={() => {
+              if (isComparing) {
+                setIsComparing(false);
+              } else {
+                setIsCompareManageOpen(true);
+              }
+            }}
             className={`flex items-center space-x-2 px-3 py-2 rounded text-sm font-medium transition-colors ${isComparing ? 'bg-blue-100 text-blue-700' : 'text-slate-600 hover:bg-slate-50'}`}
           >
             <Columns className="w-4 h-4" />
             <span>{t['debug.compare']}</span>
           </button>
+          {isComparing && (
+            <button
+              type="button"
+              onClick={() => setIsCompareManageOpen(true)}
+              className="px-3 py-1.5 rounded border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 flex items-center gap-1"
+            >
+              <History className="w-3 h-3" />
+              <span>{lang === 'en' ? 'Manage versions' : '管理比对的版本'}</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -1605,10 +1755,12 @@ export const PromptDebugger: React.FC<PromptDebuggerProps> = ({ task, lang }) =>
                 </div>
                 {!isVariablesCollapsed && (
                   <div className="flex-1 overflow-y-auto p-4 space-y-1">
-                    {detectedVars.length === 0 ? (
+                    {(!Array.isArray(detectedVars) || detectedVars.length === 0) ? (
                       <div className="text-xs text-slate-400 italic text-center mt-4">{t['debug.noVars']}</div>
                     ) : (
-                      detectedVars.map(v => <VariableInput key={v} name={v} />)
+                      detectedVars.map((v, idx) => (
+                        <VariableInput key={`${v}-${idx}`} name={v} />
+                      ))
                     )}
                   </div>
                 )}

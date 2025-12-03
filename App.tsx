@@ -101,7 +101,7 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="flex h-screen w-screen overflow-hidden bg-white text-slate-900">
+      <div className="flex h-screen w-screen overflow-hidden bg-transparent text-slate-900">
         <Sidebar 
           currentView={currentView} 
           onChangeView={setCurrentView} 

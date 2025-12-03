@@ -11,22 +11,22 @@ export const BatchSynthesis: React.FC<BatchSynthesisProps> = ({ lang }) => {
   const t = TRANSLATIONS[lang];
 
   return (
-    <div className="p-8 h-full overflow-y-auto bg-slate-50/50">
+    <div className="p-8 h-full overflow-y-auto bg-transparent">
       <h1 className="text-2xl font-bold text-slate-900 mb-6">{t['batch.title']}</h1>
       
       {/* Upload Area */}
-      <div className="border-2 border-dashed border-slate-300 rounded-xl p-10 bg-white mb-8 text-center hover:bg-slate-50 transition-colors cursor-pointer group">
-         <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
+      <div className="border-2 border-dashed border-indigo-200 rounded-2xl p-10 bg-white/90 mb-8 text-center hover:bg-pm-primary-soft/80 transition-colors cursor-pointer group shadow-sm">
+         <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform bg-gradient-to-tr from-blue-500/10 via-blue-500/5 to-purple-500/15">
            <UploadCloud className="w-8 h-8 text-blue-600" />
          </div>
          <h3 className="text-lg font-medium text-slate-900">{t['batch.upload']}</h3>
          <p className="text-slate-500 text-sm mt-1">{t['batch.dragDrop']}</p>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
-          <h3 className="font-bold text-slate-700">{t['batch.recent']}</h3>
-          <button className="text-xs text-blue-600 font-medium">View All History</button>
+      <div className="bg-pm-surface/95 rounded-2xl border border-pm-border shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-pm-primary-soft/60">
+          <h3 className="font-bold text-slate-800">{t['batch.recent']}</h3>
+          <button className="text-xs text-pm-primary font-medium hover:text-pm-accent">View All History</button>
         </div>
         <table className="w-full text-sm text-left">
           <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">

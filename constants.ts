@@ -49,7 +49,7 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     'nav.batchSynthesis': '批量合成',
     'nav.modelManager': '模型管理',
     'nav.dataProcessing': '数据处理',
-    'nav.settings': '设置1',
+    'nav.settings': '设置',
 
     'dash.title': '任务中心',
     'dash.subtitle': '管理和组织您的 Prompt 工程任务。',

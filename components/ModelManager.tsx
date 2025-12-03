@@ -32,7 +32,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
   );
 
   return (
-    <div className="p-8 h-full overflow-y-auto bg-slate-50/50">
+    <div className="p-8 h-full overflow-y-auto bg-transparent">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900">{t['nav.modelManager']}</h1>
         <p className="text-slate-500 text-sm mt-1">
@@ -43,10 +43,10 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
       </div>
 
       {/* New model form */}
-      <section className="mb-8 bg-white rounded-xl border border-slate-200 shadow-sm">
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-slate-800" />
-          <span className="text-sm font-semibold text-slate-800">
+      <section className="mb-8 bg-pm-surface/95 rounded-2xl border border-pm-border shadow-sm">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2 bg-pm-primary-soft/60">
+          <span className="w-2 h-2 rounded-full bg-gradient-to-r from-blue-500 to-purple-500" />
+          <span className="text-sm font-semibold text-slate-900">
             {lang === 'en' ? 'Add Model' : '新增模型'}
           </span>
         </div>
@@ -59,7 +59,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
             <input
               value={modelName}
               onChange={e => setModelName(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 placeholder:text-slate-400"
+              className="w-full border border-pm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pm-primary/30 focus:border-pm-primary placeholder:text-slate-400 bg-white/90"
               placeholder={lang === 'en' ? 'e.g. gpt-3.5-turbo' : '请输入模型名称，例如：gpt-3.5-turbo'}
             />
           </div>
@@ -71,7 +71,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
             <input
               value={modelAlias}
               onChange={e => setModelAlias(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 placeholder:text-slate-400"
+              className="w-full border border-pm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pm-primary/30 focus:border-pm-primary placeholder:text-slate-400 bg-white/90"
               placeholder={lang === 'en' ? 'Optional, a more friendly name' : '例如：千问、深度模型等，便于展示的别名'}
             />
           </div>
@@ -83,7 +83,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
             <textarea
               value={modelDesc}
               onChange={e => setModelDesc(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 min-h-[72px] placeholder:text-slate-400"
+              className="w-full border border-pm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pm-primary/30 focus:border-pm-primary min-h-[72px] placeholder:text-slate-400 bg-white/90"
               placeholder={
                 lang === 'en'
                   ? 'You can briefly describe what this model is good at, any limitations, etc.'
@@ -99,7 +99,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
             <input
               value={baseUrl}
               onChange={e => setBaseUrl(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 placeholder:text-slate-400"
+              className="w-full border border-pm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pm-primary/30 focus:border-pm-primary placeholder:text-slate-400 bg-white/90"
               placeholder="https://api.example.com/v1"
             />
           </div>
@@ -113,7 +113,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
                 type={showApiKey ? 'text' : 'password'}
                 value={apiKey}
                 onChange={e => setApiKey(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 placeholder:text-slate-400"
+                className="w-full border border-pm-border rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-pm-primary/30 focus:border-pm-primary placeholder:text-slate-400 bg-white/90"
                 placeholder={lang === 'en' ? 'sk-1234567890abcdef' : '例如：sk-1234567890abcdef'}
               />
               <button
@@ -134,7 +134,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
               <input
                 value={topP}
                 onChange={e => setTopP(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                className="w-full border border-pm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pm-primary/30 focus:border-pm-primary bg-white/90"
               />
             </div>
             <div>
@@ -144,7 +144,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
               <input
                 value={temperature}
                 onChange={e => setTemperature(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                className="w-full border border-pm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pm-primary/30 focus:border-pm-primary bg-white/90"
               />
             </div>
           </div>
@@ -153,7 +153,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
         <div className="px-6 pb-5 flex justify-center">
           <button
             type="button"
-            className="mt-2 inline-flex items-center px-6 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium shadow-sm hover:bg-blue-700"
+            className="mt-2 inline-flex items-center px-6 py-2 rounded-xl bg-gradient-to-r from-blue-600 via-blue-500 to-purple-500 text-white text-sm font-medium shadow-[0_10px_25px_rgba(37,99,235,0.4)] hover:from-blue-500 hover:via-blue-500 hover:to-purple-400"
           >
             <Plus className="w-4 h-4 mr-1" />
             {lang === 'en' ? 'Add Model' : '添加模型'}
@@ -162,7 +162,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
       </section>
 
       {/* Model list */}
-      <section className="bg-white rounded-xl border border-slate-200 shadow-sm">
+      <section className="bg-pm-surface/95 rounded-2xl border border-pm-border shadow-sm">
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-slate-800" />
@@ -224,4 +224,3 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ lang }) => {
     </div>
   );
 };
-
