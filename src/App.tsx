@@ -664,6 +664,7 @@ type HighlightedTextProps = {
   onOverlapLabelHover: (event: React.MouseEvent<HTMLButtonElement>, segment: TextSegment) => void;
   onOverlapLabelLeave: () => void;
   onOverlapLabelClick: (event: React.MouseEvent<HTMLButtonElement>, segment: TextSegment) => void;
+  textCursor: string;
 };
 
 function HighlightedText({
@@ -677,6 +678,7 @@ function HighlightedText({
   onOverlapLabelHover,
   onOverlapLabelLeave,
   onOverlapLabelClick,
+  textCursor,
 }: HighlightedTextProps) {
   const elements = segments.map((segment) => {
     if (!segment.annotationIds.length) {
@@ -698,6 +700,7 @@ function HighlightedText({
     const highlight = (
       <span
         className={`cursor-pointer transition-colors duration-150 [box-decoration-break:clone] [-webkit-box-decoration-break:clone] ${getHighlightClass(displayAnnotation.type)} ${isActive ? getActiveHighlightClass(displayAnnotation.type) : ''}`}
+        style={{ cursor: textCursor }}
         onClick={(event) => {
           if (window.getSelection()?.toString()) return;
           onAnnotationClick(event, displayAnnotation);
@@ -1110,6 +1113,8 @@ function ReplyPanel({
     });
   };
 
+  const textCursor = getTextCanvasCursor(mode, isShiftPressed, shiftCursorHint);
+
   return (
     <div className="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
       <div className="relative flex min-w-0 flex-1 flex-col border-r border-gray-200">
@@ -1123,7 +1128,7 @@ function ReplyPanel({
         <div
           ref={containerRef}
           className="relative flex-1 overflow-y-auto p-6"
-          style={{ cursor: getTextCanvasCursor(mode, isShiftPressed, shiftCursorHint) }}
+          style={{ cursor: textCursor }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -1139,6 +1144,7 @@ function ReplyPanel({
             onOverlapLabelHover={onOverlapLabelHover}
             onOverlapLabelLeave={onOverlapLabelLeave}
             onOverlapLabelClick={onOverlapLabelClick}
+            textCursor={textCursor}
           />
 
           {draft && draft.replyId === replyId ? (
