@@ -48,62 +48,101 @@ export const REPLY_2 = `“世界上竟然还有这种事”是一句典型的�
 场景：明明自己做对了所有事，却被所有人指责；或者看到一个漏洞百出的谎言，却被大众奉为真理。`;
 
 const getIndex = (text: string, search: string) => text.indexOf(search);
+const getRange = (text: string, search: string) => {
+  const startIndex = getIndex(text, search);
+  return {
+    startIndex,
+    endIndex: startIndex + search.length,
+    text: search,
+  };
+};
+
+const createAnnotation = (
+  id: string,
+  replyId: Annotation['replyId'],
+  search: string,
+  type: Annotation['type'],
+  subType: string,
+  reason: string,
+  severity: Annotation['severity'] = '中',
+): Annotation => {
+  const sourceText = replyId === 'reply1' ? REPLY_1 : REPLY_2;
+  const range = getRange(sourceText, search);
+
+  return {
+    id,
+    replyId,
+    startIndex: range.startIndex,
+    endIndex: range.endIndex,
+    text: search,
+    ranges: [range],
+    type,
+    subType,
+    reason,
+    severity,
+  };
+};
 
 export const INITIAL_ANNOTATIONS: Annotation[] = [
-  {
-    id: 'a1',
-    replyId: 'reply1',
-    startIndex: getIndex(REPLY_1, '失散十年的双胞胎兄弟居然在同一天申请了同一家公司的同一个职位'),
-    endIndex: getIndex(REPLY_1, '失散十年的双胞胎兄弟居然在同一天申请了同一家公司的同一个职位') + '失散十年的双胞胎兄弟居然在同一天申请了同一家公司的同一个职位'.length,
-    text: '失散十年的双胞胎兄弟居然在同一天申请了同一家公司的同一个职位',
-    ranges: [
-      {
-        startIndex: getIndex(REPLY_1, '失散十年的双胞胎兄弟居然在同一天申请了同一家公司的同一个职位'),
-        endIndex: getIndex(REPLY_1, '失散十年的双胞胎兄弟居然在同一天申请了同一家公司的同一个职位') + '失散十年的双胞胎兄弟居然在同一天申请了同一家公司的同一个职位'.length,
-        text: '失散十年的双胞胎兄弟居然在同一天申请了同一家公司的同一个职位',
-      }
-    ],
-    type: '事实性错误',
-    subType: '夸大其词',
-    reason: '这个例子太假了，虽然是说明奇闻，但举例过于不切实际。',
-    severity: '中'
-  },
-  {
-    id: 'a2',
-    replyId: 'reply1',
-    startIndex: getIndex(REPLY_1, '某个劣迹艺人复出后又因为同样的错误被封杀'),
-    endIndex: getIndex(REPLY_1, '某个劣迹艺人复出后又因为同样的错误被封杀') + '某个劣迹艺人复出后又因为同样的错误被封杀'.length,
-    text: '某个劣迹艺人复出后又因为同样的错误被封杀',
-    ranges: [
-      {
-        startIndex: getIndex(REPLY_1, '某个劣迹艺人复出后又因为同样的错误被封杀'),
-        endIndex: getIndex(REPLY_1, '某个劣迹艺人复出后又因为同样的错误被封杀') + '某个劣迹艺人复出后又因为同样的错误被封杀'.length,
-        text: '某个劣迹艺人复出后又因为同样的错误被封杀',
-      }
-    ],
-    type: '情感表达错误',
-    subType: '情感偏激',
-    reason: '吃瓜的例子不够典型，带有一点主观偏见。',
-    severity: '低'
-  },
-  {
-    id: 'a3',
-    replyId: 'reply2',
-    startIndex: getIndex(REPLY_2, '非洲有个部落把埋葬亲人的地方修成游乐场'),
-    endIndex: getIndex(REPLY_2, '非洲有个部落把埋葬亲人的地方修成游乐场') + '非洲有个部落把埋葬亲人的地方修成游乐场'.length,
-    text: '非洲有个部落把埋葬亲人的地方修成游乐场',
-    ranges: [
-      {
-        startIndex: getIndex(REPLY_2, '非洲有个部落把埋葬亲人的地方修成游乐场'),
-        endIndex: getIndex(REPLY_2, '非洲有个部落把埋葬亲人的地方修成游乐场') + '非洲有个部落把埋葬亲人的地方修成游乐场'.length,
-        text: '非洲有个部落把埋葬亲人的地方修成游乐场',
-      }
-    ],
-    type: '事实性错误',
-    subType: '无中生有',
-    reason: '并没有确凿证据表明有这样的部落，属于AI幻觉。',
-    severity: '高'
-  }
+  createAnnotation(
+    'a1',
+    'reply1',
+    '失散十年的双胞胎兄弟居然在同一天申请了同一家公司的同一个职位',
+    '事实性错误',
+    '夸大其词',
+    '场景A：这段奇闻案例的可信度不足，更像编造式示例。',
+  ),
+  createAnnotation(
+    'a2',
+    'reply1',
+    '失散十年的双胞胎兄弟居然在同一天申请了同一家公司的同一个职位',
+    '推理错误',
+    '逻辑跳跃',
+    '场景A：同一文本被另一条标注再次指出，理由是从巧合直接跳到了戏剧化结论。',
+  ),
+  createAnnotation(
+    'a3',
+    'reply1',
+    '有人专门利用老年人的同情心进行诈骗',
+    '事实性错误',
+    '与事实不符',
+    '场景B：长标注覆盖完整事件描述，认为论据来源不足。',
+  ),
+  createAnnotation(
+    'a4',
+    'reply1',
+    '利用老年人的同情心',
+    '情感表达错误',
+    '情感偏激',
+    '场景B：短标注是长标注的完全子集，认为措辞刻意煽动。',
+    '低',
+  ),
+  createAnnotation(
+    'a5',
+    'reply2',
+    '霸凌者仅因“考上大学”就免于刑事处罚',
+    '事实性错误',
+    '无中生有',
+    '场景C：案例本身缺少事实依据。',
+    '高',
+  ),
+  createAnnotation(
+    'a6',
+    'reply2',
+    '就免于刑事处罚，或者看到有人虐待流浪猫狗并拍成视频炫耀',
+    '推理错误',
+    '因果倒置',
+    '场景C：与上一条形成部分重叠，认为把不同情境并列为同一结论存在推断问题。',
+  ),
+  createAnnotation(
+    'a7',
+    'reply2',
+    '非洲有个部落把埋葬亲人的地方修成游乐场',
+    '情感表达错误',
+    '过于平淡',
+    '补充示例：表述过于平直，没有体现猎奇语境的情绪强度。',
+    '低',
+  ),
 ];
 
 export const SUB_TYPES: Record<string, string[]> = {

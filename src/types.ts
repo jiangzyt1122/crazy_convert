@@ -18,6 +18,19 @@ export interface Annotation {
   subType: string;
   reason: string;
   severity: Severity;
+  hidden?: boolean;
+}
+
+export interface TextSegment {
+  key: string;
+  replyId: 'reply1' | 'reply2';
+  startIndex: number;
+  endIndex: number;
+  text: string;
+  annotationIds: string[];
+  primaryAnnotationId: string | null;
+  isOverlap: boolean;
+  overlapCount: number;
 }
 
 export interface DraftAnnotation {

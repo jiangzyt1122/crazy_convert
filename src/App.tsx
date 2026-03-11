@@ -1,22 +1,162 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Settings, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, SkipForward, History, Maximize2, X, Check, Search, Filter, AlertCircle, Trash2, Crosshair } from 'lucide-react';
-import { Annotation, AnnotationRange, DraftAnnotation, ErrorType } from './types';
-import { PROMPT, REPLY_1, REPLY_2, INITIAL_ANNOTATIONS, SUB_TYPES } from './constants';
-import { getColorClass, getHighlightClass } from './utils';
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  CircleDot,
+  Eye,
+  EyeOff,
+  Layers3,
+  Trash2,
+  X,
+} from 'lucide-react';
+import {
+  Annotation,
+  AnnotationRange,
+  DraftAnnotation,
+  ErrorType,
+  TextSegment,
+} from './types';
+import { INITIAL_ANNOTATIONS, PROMPT, REPLY_1, REPLY_2, SUB_TYPES } from './constants';
+import {
+  getActiveHighlightClass,
+  getColorClass,
+  getHighlightClass,
+  getTypeDotClass,
+  HIGHLIGHT_LAYER_ORDER,
+} from './utils';
 
-const HOVER_CARD_WIDTH = 320;
-const HOVER_CARD_OFFSET = 16;
-const HOVER_CARD_MARGIN = 12;
+const FLOATING_WIDTH = 320;
+const FLOATING_MARGIN = 12;
+const FLOATING_OFFSET = 14;
 const ANNOTATION_TEXT_JOINER = ' … ';
 
-function getHoverCardPosition(clientX: number, clientY: number) {
-  const maxLeft = Math.max(HOVER_CARD_MARGIN, window.innerWidth - HOVER_CARD_WIDTH - HOVER_CARD_MARGIN);
-  const maxTop = Math.max(HOVER_CARD_MARGIN, window.innerHeight - 320);
+type FloatingPosition = {
+  left: number;
+  top: number;
+};
+
+type OverlapPopoverState = {
+  segmentKey: string;
+  left: number;
+  top: number;
+};
+
+type EditorPopoverState = {
+  annotationId: string;
+  left: number;
+  top: number;
+};
+
+type DragPopoverState =
+  | {
+    kind: 'overlap';
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+  }
+  | {
+    kind: 'editor';
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+  };
+
+type SuspendedPopoversState = {
+  draft: DraftAnnotation | null;
+  overlapPopover: OverlapPopoverState | null;
+  editorPopover: EditorPopoverState | null;
+};
+
+type AnnotationFilter = 'all' | ErrorType;
+type ShiftCursorHint = 'add' | 'remove' | null;
+
+function clampFloatingPosition(left: number, top: number, width = FLOATING_WIDTH, height = 320): FloatingPosition {
+  const maxLeft = Math.max(FLOATING_MARGIN, window.innerWidth - width - FLOATING_MARGIN);
+  const maxTop = Math.max(FLOATING_MARGIN, window.innerHeight - height - FLOATING_MARGIN);
 
   return {
-    left: Math.min(clientX + HOVER_CARD_OFFSET, maxLeft),
-    top: Math.min(clientY + HOVER_CARD_OFFSET, maxTop),
+    left: Math.min(Math.max(FLOATING_MARGIN, left), maxLeft),
+    top: Math.min(Math.max(FLOATING_MARGIN, top), maxTop),
   };
+}
+
+function getFloatingPosition(clientX: number, clientY: number, width = FLOATING_WIDTH, height = 320) {
+  return clampFloatingPosition(clientX + FLOATING_OFFSET, clientY + FLOATING_OFFSET, width, height);
+}
+
+function buildCursorDataUri(svg: string) {
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 12 18, text`;
+}
+
+const EDIT_CURSOR = buildCursorDataUri(`
+  <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+    <path d="M11 5h10M16 5v22M11 27h10" stroke="#334155" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M21.8 8.4l3.8 3.8" stroke="#0f766e" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M18.8 17.2l1.2-4.2 6.1-6.1a1.8 1.8 0 0 1 2.5 0l1.5 1.5a1.8 1.8 0 0 1 0 2.5L24 17l-4.2 1.2 1.2-4.2" fill="none" stroke="#0f766e" stroke-width="1.8" stroke-linejoin="round"/>
+  </svg>
+`);
+
+const ADD_CURSOR = buildCursorDataUri(`
+  <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+    <path d="M11 5h10M16 5v22M11 27h10" stroke="#334155" stroke-width="1.8" stroke-linecap="round"/>
+    <circle cx="25" cy="10" r="5.5" fill="#ecfdf5" stroke="#10b981" stroke-width="1.4"/>
+    <path d="M25 7.5v5M22.5 10h5" stroke="#10b981" stroke-width="1.8" stroke-linecap="round"/>
+  </svg>
+`);
+
+const REMOVE_CURSOR = buildCursorDataUri(`
+  <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+    <path d="M11 5h10M16 5v22M11 27h10" stroke="#334155" stroke-width="1.8" stroke-linecap="round"/>
+    <circle cx="25" cy="10" r="5.5" fill="#fff7ed" stroke="#f97316" stroke-width="1.4"/>
+    <path d="M22.5 10h5" stroke="#f97316" stroke-width="1.8" stroke-linecap="round"/>
+  </svg>
+`);
+
+function getTextCanvasCursor(mode: 'normal' | 'annotate', isShiftPressed: boolean, shiftCursorHint: ShiftCursorHint) {
+  if (mode !== 'annotate') return 'text';
+  if (!isShiftPressed) return EDIT_CURSOR;
+  if (shiftCursorHint === 'remove') return REMOVE_CURSOR;
+  if (shiftCursorHint === 'add') return ADD_CURSOR;
+  return EDIT_CURSOR;
+}
+
+function isSpaceToggleEvent(event: KeyboardEvent) {
+  return event.code === 'Space' || event.key === ' ' || event.key === 'Spacebar';
+}
+
+function collapseSelectionToPoint(clientX: number, clientY: number) {
+  const selection = window.getSelection();
+  if (!selection) return;
+
+  if ('caretPositionFromPoint' in document) {
+    const caretPosition = document.caretPositionFromPoint(clientX, clientY);
+    if (caretPosition?.offsetNode) {
+      selection.removeAllRanges();
+      selection.collapse(caretPosition.offsetNode, caretPosition.offset);
+    }
+    return;
+  }
+
+  if ('caretRangeFromPoint' in document) {
+    const caretRangeFromPoint = (document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    }).caretRangeFromPoint;
+    const range = caretRangeFromPoint?.(clientX, clientY);
+    if (range) {
+      selection.removeAllRanges();
+      selection.addRange(range);
+      selection.collapseToStart();
+    }
+  }
 }
 
 function isForwardSelection(selection: Selection) {
@@ -32,11 +172,44 @@ function isForwardSelection(selection: Selection) {
   return anchorOffset <= focusOffset;
 }
 
+function getSelectableTextLength(node: Node): number {
+  if (node instanceof HTMLElement && node.dataset.selectionIgnore === 'true') return 0;
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent?.length ?? 0;
+
+  return Array.from(node.childNodes).reduce((sum, child) => sum + getSelectableTextLength(child), 0);
+}
+
 function getOffsetFromContainer(container: HTMLElement, node: Node, offset: number) {
-  const range = document.createRange();
-  range.selectNodeContents(container);
-  range.setEnd(node, offset);
-  return range.toString().length;
+  let total = 0;
+
+  const visit = (current: Node): boolean => {
+    if (current instanceof HTMLElement && current.dataset.selectionIgnore === 'true') return false;
+
+    if (current === node) {
+      if (current.nodeType === Node.TEXT_NODE) {
+        total += offset;
+        return true;
+      }
+
+      const childNodes = Array.from(current.childNodes).slice(0, offset);
+      total += childNodes.reduce((sum, child) => sum + getSelectableTextLength(child), 0);
+      return true;
+    }
+
+    if (current.nodeType === Node.TEXT_NODE) {
+      total += current.textContent?.length ?? 0;
+      return false;
+    }
+
+    for (const child of Array.from(current.childNodes)) {
+      if (visit(child)) return true;
+    }
+
+    return false;
+  };
+
+  visit(container);
+  return total;
 }
 
 function getReplyText(replyId: Annotation['replyId']) {
@@ -53,8 +226,8 @@ function createAnnotationRange(startIndex: number, endIndex: number, sourceText:
 
 function normalizeRanges(ranges: AnnotationRange[], sourceText: string) {
   const sortedRanges = [...ranges]
-    .filter(range => range.endIndex > range.startIndex)
-    .sort((a, b) => a.startIndex - b.startIndex);
+    .filter((range) => range.endIndex > range.startIndex)
+    .sort((left, right) => left.startIndex - right.startIndex);
 
   return sortedRanges.reduce<AnnotationRange[]>((acc, range) => {
     const lastRange = acc[acc.length - 1];
@@ -71,7 +244,7 @@ function normalizeRanges(ranges: AnnotationRange[], sourceText: string) {
 }
 
 function buildAnnotationText(ranges: AnnotationRange[]) {
-  return ranges.map(range => range.text).join(ANNOTATION_TEXT_JOINER);
+  return ranges.map((range) => range.text).join(ANNOTATION_TEXT_JOINER);
 }
 
 function normalizeAnnotation(annotation: Annotation) {
@@ -89,6 +262,7 @@ function normalizeAnnotation(annotation: Annotation) {
     startIndex: ranges[0].startIndex,
     endIndex: ranges[ranges.length - 1].endIndex,
     text: buildAnnotationText(ranges),
+    hidden: annotation.hidden ?? false,
   };
 }
 
@@ -116,80 +290,89 @@ function removeSelectionFromRanges(ranges: AnnotationRange[], startIndex: number
 }
 
 function annotationOverlapsSelection(annotation: Annotation, startIndex: number, endIndex: number) {
-  return annotation.ranges.some(range => startIndex < range.endIndex && endIndex > range.startIndex);
+  return annotation.ranges.some((range) => startIndex < range.endIndex && endIndex > range.startIndex);
 }
 
 function getAnnotationDisplayIndex(annotation: Annotation, annotations: Annotation[]) {
   return annotations.filter((item) => item.replyId === annotation.replyId).findIndex((item) => item.id === annotation.id) + 1;
 }
 
-const HighlightedText = ({ text, annotations, replyId, activeAnnotationId, onHighlightClick, onHighlightHover }: any) => {
-  const sortedSegments = annotations
-    .filter((annotation: Annotation) => annotation.replyId === replyId)
-    .flatMap((annotation: Annotation) => annotation.ranges.map((range, index) => ({ annotation, range, index })))
-    .sort((a, b) => a.range.startIndex - b.range.startIndex);
-  
-  const elements = [];
-  let currentIndex = 0;
+function getDisplayIndexMap(annotations: Annotation[]) {
+  return Object.fromEntries(annotations.map((annotation) => [annotation.id, getAnnotationDisplayIndex(annotation, annotations)]));
+}
 
-  sortedSegments.forEach(({ annotation, range, index }, sortedIndex) => {
-    const isActive = activeAnnotationId === annotation.id;
-    const segmentStartIndex = Math.max(currentIndex, range.startIndex);
-    const segmentEndIndex = range.endIndex;
+function buildTextSegments(
+  text: string,
+  replyId: Annotation['replyId'],
+  annotations: Annotation[],
+  annotationDisplayOrder: string[],
+): TextSegment[] {
+  const boundaries = Array.from(new Set([
+    0,
+    text.length,
+    ...annotations.flatMap((annotation) => annotation.ranges.flatMap((range) => [range.startIndex, range.endIndex])),
+  ])).sort((left, right) => left - right);
 
-    if (segmentEndIndex <= segmentStartIndex) return;
+  const annotationPriority = new Map(annotationDisplayOrder.map((annotationId, index) => [annotationId, index]));
 
-    if (segmentStartIndex > currentIndex) {
-      elements.push(<span key={`text-${currentIndex}`}>{text.slice(currentIndex, segmentStartIndex)}</span>);
-    }
-    elements.push(
-      <mark
-        key={`ann-${annotation.id}-${index}`}
-        id={`highlight-${annotation.id}-${index}`}
-        data-annotation-id={annotation.id}
-        className={`cursor-pointer select-text transition-colors duration-200 ${getHighlightClass(annotation.type, isActive)}`}
-        onClick={() => {
-          if (window.getSelection()?.toString()) return;
-          onHighlightClick(annotation);
-        }}
-        onMouseEnter={(e) => {
-          if (e.buttons !== 0 || window.getSelection()?.toString()) return;
-          onHighlightHover(e, annotation);
-        }}
-        onMouseLeave={() => onHighlightHover(null, null)}
-      >
-        {text.slice(segmentStartIndex, segmentEndIndex)}
-      </mark>
-    );
+  const segments: TextSegment[] = [];
 
-    currentIndex = segmentEndIndex;
-  });
+  for (let boundaryIndex = 0; boundaryIndex < boundaries.length - 1; boundaryIndex += 1) {
+    const startIndex = boundaries[boundaryIndex];
+    const endIndex = boundaries[boundaryIndex + 1];
 
-  if (currentIndex < text.length) {
-    elements.push(<span key={`text-${currentIndex}`}>{text.slice(currentIndex)}</span>);
+    if (endIndex <= startIndex) continue;
+
+    const coveringAnnotations = annotations
+      .filter((annotation) => annotation.ranges.some((range) => startIndex >= range.startIndex && endIndex <= range.endIndex))
+      .sort((left, right) => (
+        (annotationPriority.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (annotationPriority.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+      ));
+
+    const key = `${replyId}:${startIndex}-${endIndex}`;
+    const primaryAnnotation = coveringAnnotations[0]?.id ?? null;
+
+    segments.push({
+      key,
+      replyId,
+      startIndex,
+      endIndex,
+      text: text.slice(startIndex, endIndex),
+      annotationIds: coveringAnnotations.map((annotation) => annotation.id),
+      primaryAnnotationId: primaryAnnotation,
+      isOverlap: coveringAnnotations.length > 1,
+      overlapCount: coveringAnnotations.length,
+    });
   }
 
-  return <div className="whitespace-pre-wrap leading-relaxed text-gray-800 text-sm select-text">{elements}</div>;
+  return segments;
+}
+
+type DraftPopoverProps = {
+  draft: DraftAnnotation;
+  setDraft: React.Dispatch<React.SetStateAction<DraftAnnotation | null>>;
+  onSave: () => void;
+  onCancel: () => void;
 };
 
-const DraftPopover = ({ draft, setDraft, onSave, onCancel }: any) => {
-  return (
-    <div 
-      className="annotation-popover absolute z-50 bg-white shadow-2xl border border-gray-200 rounded-xl p-4 w-80 animate-in fade-in zoom-in duration-200"
+function DraftPopover({ draft, setDraft, onSave, onCancel }: DraftPopoverProps) {
+  return createPortal(
+    <div
+      className="annotation-popover fixed z-[120] w-80 rounded-xl border border-gray-200 bg-white p-4 shadow-2xl"
       style={{ top: draft.top, left: draft.left }}
-      onMouseUp={e => e.stopPropagation()}
+      onMouseUp={(event) => event.stopPropagation()}
     >
-      <div className="flex justify-between items-center mb-3">
-        <div className="font-medium text-sm text-gray-800">添加标注</div>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-sm font-medium text-gray-800">添加标注</div>
         <button onClick={onCancel} className="text-gray-400 hover:text-gray-600"><X size={16}/></button>
       </div>
-      
+
       <div className="mb-3">
-        <label className="block text-xs text-gray-500 mb-1">label name</label>
+        <label className="mb-1 block text-xs text-gray-500">label name</label>
         <select
-          className="w-full text-sm border border-gray-200 rounded-md p-1.5 bg-white focus:ring-1 focus:ring-blue-500 outline-none"
+          className="w-full rounded-md border border-gray-200 bg-white p-1.5 text-sm outline-none focus:ring-1 focus:ring-blue-500"
           value={draft.type}
-          onChange={e => setDraft({ ...draft, type: e.target.value as ErrorType, subType: '' })}
+          onChange={(event) => setDraft({ ...draft, type: event.target.value as ErrorType, subType: '' })}
         >
           <option value="事实性错误">事实性错误</option>
           <option value="推理错误">推理错误</option>
@@ -198,130 +381,416 @@ const DraftPopover = ({ draft, setDraft, onSave, onCancel }: any) => {
       </div>
 
       <div className="mb-3">
-        <label className="block text-xs text-gray-500 mb-1">二级类型</label>
-        <select 
-          className="w-full text-sm border border-gray-200 rounded-md p-1.5 bg-white focus:ring-1 focus:ring-blue-500 outline-none" 
-          value={draft.subType} 
-          onChange={e => setDraft({...draft, subType: e.target.value})}
+        <label className="mb-1 block text-xs text-gray-500">二级类型</label>
+        <select
+          className="w-full rounded-md border border-gray-200 bg-white p-1.5 text-sm outline-none focus:ring-1 focus:ring-blue-500"
+          value={draft.subType}
+          onChange={(event) => setDraft({ ...draft, subType: event.target.value })}
         >
           <option value="">无</option>
-          {SUB_TYPES[draft.type]?.map(st => <option key={st} value={st}>{st}</option>)}
+          {SUB_TYPES[draft.type]?.map((subType) => <option key={subType} value={subType}>{subType}</option>)}
         </select>
       </div>
-      
-      <textarea 
-        className="w-full text-sm border border-gray-200 rounded-md p-2 mb-4 h-16 resize-none focus:ring-1 focus:ring-blue-500 outline-none" 
+
+      <textarea
+        className="mb-4 h-16 w-full resize-none rounded-md border border-gray-200 p-2 text-sm outline-none focus:ring-1 focus:ring-blue-500"
         placeholder="简短说明原因..."
         value={draft.reason}
-        onChange={e => setDraft({...draft, reason: e.target.value})}
+        onChange={(event) => setDraft({ ...draft, reason: event.target.value })}
       />
-      
+
       <div className="flex justify-end gap-2">
-        <button className="px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-md transition-colors" onClick={onCancel}>取消</button>
-        <button className="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors" onClick={onSave}>保存</button>
+        <button className="rounded-md px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100" onClick={onCancel}>取消</button>
+        <button className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-700" onClick={onSave}>保存</button>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
+}
+
+type AnnotationEditorPopoverProps = {
+  annotation: Annotation;
+  displayIndex: number;
+  position: FloatingPosition;
+  onClose: () => void;
+  onDelete: (annotationId: string) => void;
+  onUpdateAnnotation: (id: string, updates: Partial<Annotation>) => void;
+  onDragStart: (event: React.PointerEvent<HTMLDivElement>) => void;
 };
 
-const HoverEditorPopover = ({ annotation, displayIndex, position, onMouseEnter, onMouseLeave, onDelete, handleUpdateAnnotation }: any) => {
-  return (
-    <div
-      data-annotation-id={annotation.id}
-      className="fixed z-50 w-80 rounded-xl border border-slate-700 bg-slate-950/95 p-3 text-white shadow-2xl backdrop-blur-sm"
-      style={position}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-    >
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[11px] text-slate-400 shrink-0">#{displayIndex}</span>
+function AnnotationEditorPopover({
+  annotation,
+  displayIndex,
+  position,
+  onClose,
+  onDelete,
+  onUpdateAnnotation,
+  onDragStart,
+}: AnnotationEditorPopoverProps) {
+  return createPortal(
+    <div className="annotation-editor-popover fixed z-[145] w-[340px] rounded-2xl border border-gray-200 bg-white p-4 shadow-2xl" style={position}>
+      <div className="mb-3 flex cursor-move items-start justify-between gap-3" onPointerDown={onDragStart}>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-medium text-gray-800">
+            <span className={`h-2.5 w-2.5 rounded-full ${getTypeDotClass(annotation.type)}`}></span>
+            <span>#{displayIndex}</span>
+            <span className={`rounded-md border px-2 py-1 text-[11px] font-medium ${getColorClass(annotation.type)}`}>
+              {annotation.type}
+            </span>
+          </div>
+          <div className="mt-2 rounded border border-gray-100 bg-gray-50 p-2 text-xs text-gray-600">
+            <div className="leading-relaxed">"{annotation.text}"</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete(annotation.id);
+            }}
+            className="rounded p-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
+            title="删除"
+          >
+            <Trash2 size={16}/>
+          </button>
+          <button
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
+            className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          >
+            <X size={16}/>
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <label className="mb-1 block text-xs text-gray-500">错误类型</label>
           <select
-            className={`text-[11px] px-2 py-1 rounded-md border font-medium outline-none cursor-pointer ${getColorClass(annotation.type)}`}
+            className={`w-full rounded-md border px-2 py-1.5 text-sm font-medium outline-none ${getColorClass(annotation.type)}`}
             value={annotation.type}
-            onChange={e => handleUpdateAnnotation(annotation.id, { type: e.target.value as ErrorType, subType: '' })}
+            onChange={(event) => onUpdateAnnotation(annotation.id, { type: event.target.value as ErrorType, subType: '' })}
           >
             <option value="事实性错误">事实性错误</option>
             <option value="推理错误">推理错误</option>
             <option value="情感表达错误">情感表达错误</option>
           </select>
         </div>
-        <button
-          className="p-1 text-slate-400 hover:text-red-300 hover:bg-white/5 rounded transition-colors"
-          onClick={() => onDelete(annotation.id)}
-          title="删除"
-        >
-          <Trash2 size={14}/>
-        </button>
-      </div>
-
-      <div className="text-xs text-slate-300 bg-white/5 border border-white/10 rounded-lg px-2.5 py-2 mb-3 leading-relaxed line-clamp-3">
-        "{annotation.text}"
-      </div>
-
-      <div className="space-y-3">
         <div>
-          <label className="block text-[11px] text-slate-400 mb-1">二级类型</label>
+          <label className="mb-1 block text-xs text-gray-500">二级类型</label>
           <select
-            className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm text-white outline-none focus:border-blue-500"
+            className="w-full rounded border border-gray-200 bg-white p-1.5 text-sm"
             value={annotation.subType}
-            onChange={e => handleUpdateAnnotation(annotation.id, { subType: e.target.value })}
+            onChange={(event) => onUpdateAnnotation(annotation.id, { subType: event.target.value })}
           >
             <option value="">无</option>
-            {SUB_TYPES[annotation.type]?.map(st => <option key={st} value={st}>{st}</option>)}
+            {SUB_TYPES[annotation.type]?.map((subType) => <option key={subType} value={subType}>{subType}</option>)}
           </select>
         </div>
-
         <div>
-          <label className="block text-[11px] text-slate-400 mb-1">原因</label>
+          <label className="mb-1 block text-xs text-gray-500">原因</label>
           <textarea
-            className="w-full h-24 resize-none rounded-md border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-white outline-none focus:border-blue-500"
+            className="h-16 w-full resize-none rounded border border-gray-200 p-1.5 text-sm"
             value={annotation.reason}
-            onChange={e => handleUpdateAnnotation(annotation.id, { reason: e.target.value })}
-            placeholder="简短说明原因..."
+            onChange={(event) => onUpdateAnnotation(annotation.id, { reason: event.target.value })}
           />
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
+}
+
+type OverlapPopoverProps = {
+  segment: TextSegment;
+  annotations: Annotation[];
+  displayIndexMap: Record<string, number>;
+  position: FloatingPosition;
+  onClose: () => void;
+  onSetPrimary: (currentPrimaryId: string | null, annotationId: string) => void;
+  onUpdateAnnotation: (id: string, updates: Partial<Annotation>) => void;
+  onDelete: (annotationId: string) => void;
+  onDragStart: (event: React.PointerEvent<HTMLDivElement>) => void;
 };
 
-const AnnotationSidebar = ({ replyId, annotations, activeAnnotationId, setActiveAnnotationId, handleLocate, handleDelete, handleUpdateAnnotation }: any) => {
-  const [filter, setFilter] = useState('all');
+function OverlapPopover({
+  segment,
+  annotations,
+  displayIndexMap,
+  position,
+  onClose,
+  onSetPrimary,
+  onUpdateAnnotation,
+  onDelete,
+  onDragStart,
+}: OverlapPopoverProps) {
   const [expandedAnnotationIds, setExpandedAnnotationIds] = useState<string[]>([]);
 
-  const currentReplyAnnotations = annotations.filter((a: Annotation) => a.replyId === replyId);
+  const toggleExpanded = (annotationId: string) => {
+    setExpandedAnnotationIds((ids) => (
+      ids.includes(annotationId)
+        ? ids.filter((id) => id !== annotationId)
+        : [...ids, annotationId]
+    ));
+  };
 
-  const filteredList = currentReplyAnnotations.filter((a: Annotation) => {
-    if (filter === 'all') return true;
-    return a.type === filter;
+  return createPortal(
+    <div className="overlap-popover fixed z-[140] w-[360px] rounded-2xl border border-gray-200 bg-white p-4 shadow-2xl" style={position}>
+      <div className="mb-3 flex cursor-move items-start justify-between gap-3" onPointerDown={onDragStart}>
+        <div>
+          <div className="text-sm font-semibold text-gray-800">重叠标注</div>
+        </div>
+        <button
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose();
+          }}
+          className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+        >
+          <X size={16}/>
+        </button>
+      </div>
+
+      <div className="mb-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs leading-relaxed text-gray-700">
+        "{segment.text}"
+      </div>
+
+      <div className="space-y-3">
+        {annotations.map((annotation) => {
+          const isPrimary = annotation.id === segment.primaryAnnotationId;
+          const isExpanded = expandedAnnotationIds.includes(annotation.id);
+          const primaryBorderClass = isPrimary ? getColorClass(annotation.type).split(' ').find((item) => item.startsWith('border-')) ?? 'border-gray-300' : 'border-gray-200';
+
+          return (
+            <div
+              key={annotation.id}
+              className={`cursor-pointer rounded-xl bg-white p-3 transition-shadow ${isPrimary ? `border-2 ${primaryBorderClass}` : 'border border-gray-200'} ${isExpanded ? 'shadow-sm' : ''}`}
+              onClick={() => toggleExpanded(annotation.id)}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 text-sm font-medium text-gray-800">
+                    <span className={`h-2.5 w-2.5 rounded-full ${getTypeDotClass(annotation.type)}`}></span>
+                    <span>#{displayIndexMap[annotation.id]}</span>
+                    <span className={`rounded-md border px-2 py-1 text-[11px] font-medium ${getColorClass(annotation.type)}`}>
+                      {annotation.type}
+                    </span>
+                  </div>
+                  <div className="mt-2 rounded border border-gray-100 bg-gray-50 p-2 text-xs text-gray-600">
+                    <div className="leading-relaxed">"{annotation.text}"</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSetPrimary(segment.primaryAnnotationId, annotation.id);
+                    }}
+                    className={`rounded p-1 transition-colors ${isPrimary ? `${getTypeDotClass(annotation.type).replace('bg-', 'text-')} bg-gray-50` : 'text-gray-400 hover:bg-gray-100 hover:text-gray-700'}`}
+                    title="设为主显示"
+                  >
+                    <CircleDot size={16}/>
+                  </button>
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDelete(annotation.id);
+                    }}
+                    className="rounded p-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                    title="删除"
+                  >
+                    <Trash2 size={16}/>
+                  </button>
+                </div>
+              </div>
+
+              {isExpanded ? (
+                <div className="mt-3 cursor-default space-y-3 border-t border-gray-200 pt-3" onClick={(event) => event.stopPropagation()}>
+                  <div>
+                    <label className="mb-1 block text-xs text-gray-500">错误类型</label>
+                    <select
+                      className={`w-full rounded-md border px-2 py-1.5 text-sm font-medium outline-none ${getColorClass(annotation.type)}`}
+                      value={annotation.type}
+                      onChange={(event) => onUpdateAnnotation(annotation.id, { type: event.target.value as ErrorType, subType: '' })}
+                    >
+                      <option value="事实性错误">事实性错误</option>
+                      <option value="推理错误">推理错误</option>
+                      <option value="情感表达错误">情感表达错误</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-gray-500">二级类型</label>
+                    <select
+                      className="w-full rounded border border-gray-200 bg-white p-1.5 text-sm"
+                      value={annotation.subType}
+                      onChange={(event) => onUpdateAnnotation(annotation.id, { subType: event.target.value })}
+                    >
+                      <option value="">无</option>
+                      {SUB_TYPES[annotation.type]?.map((subType) => <option key={subType} value={subType}>{subType}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-gray-500">原因</label>
+                    <textarea
+                      className="h-16 w-full resize-none rounded border border-gray-200 p-1.5 text-sm"
+                      value={annotation.reason}
+                      onChange={(event) => onUpdateAnnotation(annotation.id, { reason: event.target.value })}
+                    />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+type HighlightedTextProps = {
+  text: string;
+  segments: TextSegment[];
+  annotationsById: Record<string, Annotation>;
+  activeAnnotationId: string | null;
+  onAnnotationClick: (event: React.MouseEvent<HTMLSpanElement>, annotation: Annotation) => void;
+  onSegmentHover: (event: React.MouseEvent<HTMLElement>, segment: TextSegment) => void;
+  onSegmentLeave: () => void;
+  onOverlapLabelHover: (event: React.MouseEvent<HTMLButtonElement>, segment: TextSegment) => void;
+  onOverlapLabelLeave: () => void;
+  onOverlapLabelClick: (event: React.MouseEvent<HTMLButtonElement>, segment: TextSegment) => void;
+};
+
+function HighlightedText({
+  text,
+  segments,
+  annotationsById,
+  activeAnnotationId,
+  onAnnotationClick,
+  onSegmentHover,
+  onSegmentLeave,
+  onOverlapLabelHover,
+  onOverlapLabelLeave,
+  onOverlapLabelClick,
+}: HighlightedTextProps) {
+  const elements = segments.map((segment) => {
+    if (!segment.annotationIds.length) {
+      return <span key={segment.key}>{segment.text}</span>;
+    }
+
+    const primaryAnnotation = segment.primaryAnnotationId ? annotationsById[segment.primaryAnnotationId] : null;
+    if (!primaryAnnotation) {
+      return <span key={segment.key}>{segment.text}</span>;
+    }
+
+    const isActive = Boolean(activeAnnotationId && segment.annotationIds.includes(activeAnnotationId));
+    const activeAnnotation = isActive && activeAnnotationId ? annotationsById[activeAnnotationId] : null;
+    const displayAnnotation = activeAnnotation ?? primaryAnnotation;
+    const wrapperClassName = segment.isOverlap
+      ? 'relative inline-block align-baseline pt-4'
+      : 'inline';
+
+    const highlight = (
+      <span
+        className={`cursor-pointer transition-colors duration-150 [box-decoration-break:clone] [-webkit-box-decoration-break:clone] ${getHighlightClass(displayAnnotation.type)} ${isActive ? getActiveHighlightClass(displayAnnotation.type) : ''}`}
+        onClick={(event) => {
+          if (window.getSelection()?.toString()) return;
+          onAnnotationClick(event, displayAnnotation);
+        }}
+        onMouseEnter={(event) => {
+          if (event.buttons !== 0 || window.getSelection()?.toString()) return;
+          onSegmentHover(event, segment);
+        }}
+        onMouseLeave={onSegmentLeave}
+      >
+        {segment.text}
+      </span>
+    );
+
+    return (
+      <span
+        key={segment.key}
+        data-highlight-ids={segment.annotationIds.join(' ')}
+        data-annotation-id={displayAnnotation.id}
+        className={wrapperClassName}
+      >
+        {segment.isOverlap ? (
+          <button
+            type="button"
+            data-selection-ignore="true"
+            className="overlap-pill absolute left-1/2 top-0 -translate-x-1/2 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold leading-none text-sky-700 shadow-sm hover:bg-sky-100"
+            onMouseEnter={(event) => onOverlapLabelHover(event, segment)}
+            onMouseLeave={onOverlapLabelLeave}
+            onClick={(event) => onOverlapLabelClick(event, segment)}
+          >
+            {segment.overlapCount}
+          </button>
+        ) : null}
+        {highlight}
+      </span>
+    );
   });
 
-  const allFilteredExpanded = filteredList.length > 0 && filteredList.every((ann: Annotation) => expandedAnnotationIds.includes(ann.id));
+  return <div className="whitespace-pre-wrap leading-relaxed text-sm text-gray-800 select-text">{elements}</div>;
+}
 
-  const toggleAnnotationExpanded = (annotationId: string) => {
+type AnnotationSidebarProps = {
+  replyId: Annotation['replyId'];
+  annotations: Annotation[];
+  activeAnnotationId: string | null;
+  setActiveAnnotationId: (id: string | null) => void;
+  handleDelete: (id: string) => void;
+  handleUpdateAnnotation: (id: string, updates: Partial<Annotation>) => void;
+  handleToggleHidden: (id: string) => void;
+  filter: AnnotationFilter;
+  setFilter: (value: AnnotationFilter) => void;
+};
+
+function AnnotationSidebar({
+  replyId,
+  annotations,
+  activeAnnotationId,
+  setActiveAnnotationId,
+  handleDelete,
+  handleUpdateAnnotation,
+  handleToggleHidden,
+  filter,
+  setFilter,
+}: AnnotationSidebarProps) {
+  const [expandedAnnotationIds, setExpandedAnnotationIds] = useState<string[]>([]);
+
+  const currentReplyAnnotations = annotations.filter((annotation) => annotation.replyId === replyId);
+  const filteredList = currentReplyAnnotations.filter((annotation) => (filter === 'all' ? true : annotation.type === filter));
+  const allFilteredExpanded = filteredList.length > 0 && filteredList.every((annotation) => expandedAnnotationIds.includes(annotation.id));
+
+  useEffect(() => {
+    if (!activeAnnotationId) return;
+    if (!annotations.some((annotation) => annotation.replyId === replyId && annotation.id === activeAnnotationId)) return;
+
+    setExpandedAnnotationIds((ids) => (ids.includes(activeAnnotationId) ? ids : [...ids, activeAnnotationId]));
+  }, [activeAnnotationId, annotations, replyId]);
+
+  const toggleAnnotationExpanded = (annotationId: string, shouldSelect = true) => {
     const isExpanded = expandedAnnotationIds.includes(annotationId);
-    setExpandedAnnotationIds((ids) => isExpanded ? ids.filter((id) => id !== annotationId) : [...ids, annotationId]);
-    setActiveAnnotationId(annotationId);
-  };
-
-  const selectAnnotation = (annotationId: string) => {
-    setActiveAnnotationId(annotationId);
-  };
-
-  const collapseAnnotation = (annotationId: string) => {
-    setExpandedAnnotationIds((ids) => ids.filter((id) => id !== annotationId));
-    setActiveAnnotationId(annotationId);
+    setExpandedAnnotationIds((ids) => (isExpanded ? ids.filter((id) => id !== annotationId) : [...ids, annotationId]));
+    if (shouldSelect) {
+      setActiveAnnotationId(annotationId);
+    }
   };
 
   const toggleAllExpanded = () => {
     if (allFilteredExpanded) {
-      const filteredIds = new Set(filteredList.map((ann: Annotation) => ann.id));
+      const filteredIds = new Set(filteredList.map((annotation) => annotation.id));
       setExpandedAnnotationIds((ids) => ids.filter((id) => !filteredIds.has(id)));
       return;
     }
 
-    setExpandedAnnotationIds((ids) => Array.from(new Set([...ids, ...filteredList.map((ann: Annotation) => ann.id)])));
+    setExpandedAnnotationIds((ids) => Array.from(new Set([...ids, ...filteredList.map((annotation) => annotation.id)])));
   };
 
   const handleDeleteInList = (annotationId: string) => {
@@ -330,18 +799,15 @@ const AnnotationSidebar = ({ replyId, annotations, activeAnnotationId, setActive
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-gray-50 overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-gray-50">
       <div className="shrink-0 p-4 pb-3">
-        <div className="flex justify-between items-center">
-          <h3 className="font-medium text-sm text-gray-700">全部问题 ({filteredList.length})</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium text-gray-700">全部问题 ({filteredList.length})</h3>
           <div className="flex items-center gap-2">
-            <button
-              className="text-xs text-blue-600 hover:text-blue-700"
-              onClick={toggleAllExpanded}
-            >
+            <button className="text-xs text-blue-600 hover:text-blue-700" onClick={toggleAllExpanded}>
               {allFilteredExpanded ? '全部收起' : '一键展开'}
             </button>
-            <select className="text-xs border border-gray-300 rounded p-1 bg-white" value={filter} onChange={e => setFilter(e.target.value)}>
+            <select className="rounded border border-gray-300 bg-white p-1 text-xs" value={filter} onChange={(event) => setFilter(event.target.value as AnnotationFilter)}>
               <option value="all">全部</option>
               <option value="事实性错误">事实性错误</option>
               <option value="推理错误">推理错误</option>
@@ -354,80 +820,97 @@ const AnnotationSidebar = ({ replyId, annotations, activeAnnotationId, setActive
       <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4">
         <div className="space-y-3">
           {filteredList.length === 0 ? (
-            <div className="text-center text-gray-400 text-sm py-8">暂无标注</div>
+            <div className="py-8 text-center text-sm text-gray-400">暂无标注</div>
           ) : (
-            filteredList.map((ann: Annotation, idx: number) => {
-              const isSelected = activeAnnotationId === ann.id;
-              const isExpanded = expandedAnnotationIds.includes(ann.id);
+            filteredList.map((annotation, index) => {
+              const isSelected = activeAnnotationId === annotation.id;
+              const isExpanded = expandedAnnotationIds.includes(annotation.id);
 
               return (
-                <div 
-                  key={ann.id} 
-                  data-annotation-id={ann.id}
-                  className={`border rounded-lg p-3 text-sm transition-shadow cursor-pointer ${isSelected ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/30' : isExpanded ? 'border-blue-200 bg-blue-50/20' : 'border-gray-200 bg-white hover:shadow-md'}`}
+                <div
+                  key={annotation.id}
+                  data-annotation-id={annotation.id}
+                  className={`cursor-pointer rounded-lg border p-3 text-sm transition-shadow ${isSelected ? 'border-blue-500 bg-blue-50/30 ring-2 ring-blue-500' : isExpanded ? 'border-blue-200 bg-blue-50/20' : 'border-gray-200 bg-white hover:shadow-md'}`}
                   onClick={() => {
                     if (isExpanded) {
-                      selectAnnotation(ann.id);
+                      toggleAnnotationExpanded(annotation.id, false);
                       return;
                     }
-                    toggleAnnotationExpanded(ann.id);
+
+                    setActiveAnnotationId(annotation.id);
+                    toggleAnnotationExpanded(annotation.id, false);
                   }}
                 >
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-xs font-mono text-gray-400">#{idx + 1}</span>
-                      <select
-                        className={`text-[11px] px-2 py-1 rounded-md border font-medium outline-none cursor-pointer ${getColorClass(ann.type)}`}
-                        value={ann.type}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={e => handleUpdateAnnotation(ann.id, { type: e.target.value as ErrorType, subType: '' })}
-                      >
-                        <option value="事实性错误">事实性错误</option>
-                        <option value="推理错误">推理错误</option>
-                        <option value="情感表达错误">情感表达错误</option>
-                      </select>
+                  <div className="mb-2 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono text-gray-400">#{index + 1}</span>
+                        <select
+                          className={`rounded-md border px-2 py-1 text-[11px] font-medium outline-none ${getColorClass(annotation.type)}`}
+                          value={annotation.type}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => handleUpdateAnnotation(annotation.id, { type: event.target.value as ErrorType, subType: '' })}
+                        >
+                          <option value="事实性错误">事实性错误</option>
+                          <option value="推理错误">推理错误</option>
+                          <option value="情感表达错误">情感表达错误</option>
+                        </select>
+                      </div>
+                      {annotation.hidden ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">高亮已隐藏</span>
+                        </div>
+                      ) : null}
                     </div>
-                    <div className="flex gap-1 shrink-0">
+
+                    <div className="flex shrink-0 gap-1">
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isExpanded) {
-                            collapseAnnotation(ann.id);
-                            return;
-                          }
-                          toggleAnnotationExpanded(ann.id);
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleAnnotationExpanded(annotation.id, !isExpanded);
                         }}
-                        className="p-1 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded"
+                        className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
                         title={isExpanded ? '收起' : '展开'}
                       >
                         {isExpanded ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
                       </button>
-                      <button onClick={(e) => { e.stopPropagation(); handleLocate(ann); }} className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded" title="定位"><Crosshair size={14}/></button>
-                      <button onClick={(e) => { e.stopPropagation(); handleDeleteInList(ann.id); }} className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="删除"><Trash2 size={14}/></button>
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleToggleHidden(annotation.id);
+                        }}
+                        className={`rounded p-1 ${annotation.hidden ? 'text-amber-600 hover:bg-amber-50 hover:text-amber-700' : 'text-gray-400 hover:bg-gray-100 hover:text-gray-700'}`}
+                        title={annotation.hidden ? '显示高亮' : '隐藏高亮'}
+                      >
+                        {annotation.hidden ? <EyeOff size={14}/> : <Eye size={14}/>}
+                      </button>
+                      <button onClick={(event) => { event.stopPropagation(); handleDeleteInList(annotation.id); }} className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600" title="删除"><Trash2 size={14}/></button>
                     </div>
                   </div>
 
-                  <div className={`text-xs text-gray-600 bg-gray-50 p-1.5 rounded border border-gray-100 ${isExpanded ? 'mb-3' : ''}`}>"{ann.text}"</div>
+                  <div className="rounded border border-gray-100 bg-gray-50 p-2 text-xs text-gray-600">
+                    <div className="leading-relaxed">"{annotation.text}"</div>
+                  </div>
 
                   {isExpanded ? (
-                    <div className="space-y-3 border-t border-gray-200 pt-3 mt-3 cursor-default" onClick={(e) => e.stopPropagation()}>
+                    <div className="mt-3 cursor-default space-y-3 border-t border-gray-200 pt-3" onClick={(event) => event.stopPropagation()}>
                       <div>
-                        <label className="block text-xs text-gray-500 mb-1">二级类型</label>
-                        <select 
-                          className="w-full text-sm border border-gray-200 rounded p-1.5 bg-white"
-                          value={ann.subType}
-                          onChange={e => handleUpdateAnnotation(ann.id, { subType: e.target.value })}
+                        <label className="mb-1 block text-xs text-gray-500">二级类型</label>
+                        <select
+                          className="w-full rounded border border-gray-200 bg-white p-1.5 text-sm"
+                          value={annotation.subType}
+                          onChange={(event) => handleUpdateAnnotation(annotation.id, { subType: event.target.value })}
                         >
                           <option value="">无</option>
-                          {SUB_TYPES[ann.type]?.map(st => <option key={st} value={st}>{st}</option>)}
+                          {SUB_TYPES[annotation.type]?.map((subType) => <option key={subType} value={subType}>{subType}</option>)}
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs text-gray-500 mb-1">原因</label>
-                        <textarea 
-                          className="w-full text-sm border border-gray-200 rounded p-1.5 h-16 resize-none"
-                          value={ann.reason}
-                          onChange={e => handleUpdateAnnotation(ann.id, { reason: e.target.value })}
+                        <label className="mb-1 block text-xs text-gray-500">原因</label>
+                        <textarea
+                          className="h-16 w-full resize-none rounded border border-gray-200 p-1.5 text-sm"
+                          value={annotation.reason}
+                          onChange={(event) => handleUpdateAnnotation(annotation.id, { reason: event.target.value })}
                         />
                       </div>
                     </div>
@@ -440,21 +923,114 @@ const AnnotationSidebar = ({ replyId, annotations, activeAnnotationId, setActive
       </div>
     </div>
   );
+}
+
+type ReplyPanelProps = {
+  replyId: Annotation['replyId'];
+  text: string;
+  title: string;
+  wordCount: number;
+  annotations: Annotation[];
+  segments: TextSegment[];
+  activeTab: 'overall' | 'annotate';
+  setActiveTab: (value: 'overall' | 'annotate') => void;
+  mode: 'normal' | 'annotate';
+  draft: DraftAnnotation | null;
+  setDraft: React.Dispatch<React.SetStateAction<DraftAnnotation | null>>;
+  activeAnnotationId: string | null;
+  setActiveAnnotationId: (id: string | null) => void;
+  handleDelete: (id: string) => void;
+  handleUpdateAnnotation: (id: string, updates: Partial<Annotation>) => void;
+  handleToggleHidden: (id: string) => void;
+  onSaveDraft: () => void;
+  onFocusAnnotation: (event: React.MouseEvent<HTMLSpanElement>, annotation: Annotation) => void;
+  onSegmentHover: (event: React.MouseEvent<HTMLElement>, segment: TextSegment) => void;
+  onSegmentLeave: () => void;
+  onOverlapLabelHover: (event: React.MouseEvent<HTMLButtonElement>, segment: TextSegment) => void;
+  onOverlapLabelLeave: () => void;
+  onOverlapLabelClick: (event: React.MouseEvent<HTMLButtonElement>, segment: TextSegment) => void;
+  onTextMouseDown: (event: React.MouseEvent) => void;
+  isShiftPressed: boolean;
 };
 
-const ReplyPanel = ({ replyId, text, title, wordCount, annotations, activeTab, setActiveTab, mode, draft, setDraft, activeAnnotationId, setActiveAnnotationId, handleLocate, handleDelete, handleUpdateAnnotation, onSaveDraft, onHighlightHover, onTextMouseDown }: any) => {
+function ReplyPanel({
+  replyId,
+  text,
+  title,
+  wordCount,
+  annotations,
+  segments,
+  activeTab,
+  setActiveTab,
+  mode,
+  draft,
+  setDraft,
+  activeAnnotationId,
+  setActiveAnnotationId,
+  handleDelete,
+  handleUpdateAnnotation,
+  handleToggleHidden,
+  onSaveDraft,
+  onFocusAnnotation,
+  onSegmentHover,
+  onSegmentLeave,
+  onOverlapLabelHover,
+  onOverlapLabelLeave,
+  onOverlapLabelClick,
+  onTextMouseDown,
+  isShiftPressed,
+}: ReplyPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [annotationFilter, setAnnotationFilter] = useState<AnnotationFilter>('all');
+  const [shiftCursorHint, setShiftCursorHint] = useState<ShiftCursorHint>(null);
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    const target = e.target;
-    if (target instanceof Element && target.closest('.annotation-popover')) return;
-    onTextMouseDown();
+  const visibleAnnotations = annotations.filter((annotation) => !annotation.hidden && annotation.replyId === replyId);
+  const annotationsById = Object.fromEntries(visibleAnnotations.map((annotation) => [annotation.id, annotation]));
+
+  const handleMouseDown = (event: React.MouseEvent) => {
+    const target = event.target;
+    if (target instanceof Element && (target.closest('.annotation-popover') || target.closest('.overlap-popover'))) return;
+    if (event.shiftKey) {
+      setShiftCursorHint(null);
+    }
+    onTextMouseDown(event);
   };
 
-  const handleMouseUp = (e: React.MouseEvent) => {
+  const handleMouseMove = () => {
+    if (mode !== 'annotate' || !isShiftPressed) {
+      if (shiftCursorHint !== null) setShiftCursorHint(null);
+      return;
+    }
+
+    const selection = window.getSelection();
+    const container = containerRef.current;
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed || !container) {
+      if (shiftCursorHint !== null) setShiftCursorHint(null);
+      return;
+    }
+
+    const { anchorNode, focusNode } = selection;
+    if (!anchorNode || !focusNode || !container.contains(anchorNode) || !container.contains(focusNode)) {
+      if (shiftCursorHint !== null) setShiftCursorHint(null);
+      return;
+    }
+
+    const nextHint: ShiftCursorHint = isForwardSelection(selection) ? 'add' : 'remove';
+    if (shiftCursorHint !== nextHint) {
+      setShiftCursorHint(nextHint);
+    }
+  };
+
+  const handleMouseUp = (event: React.MouseEvent) => {
+    setShiftCursorHint(null);
     if (mode !== 'annotate') return;
-    const target = e.target;
-    if (target instanceof Element && target.closest('.annotation-popover')) return;
+
+    const target = event.target;
+    if (target instanceof Element && (
+      target.closest('.annotation-popover')
+      || target.closest('.overlap-pill')
+      || target.closest('.overlap-popover')
+    )) return;
 
     requestAnimationFrame(() => {
       const selection = window.getSelection();
@@ -470,14 +1046,15 @@ const ReplyPanel = ({ replyId, text, title, wordCount, annotations, activeTab, s
       if (!selectedText.trim()) return;
 
       const startIndex = getOffsetFromContainer(container, range.startContainer, range.startOffset);
-      const endIndex = startIndex + selectedText.length;
+      const endIndex = getOffsetFromContainer(container, range.endContainer, range.endOffset);
+      const normalizedStart = Math.min(startIndex, endIndex);
+      const normalizedEnd = Math.max(startIndex, endIndex);
       const sourceText = getReplyText(replyId);
 
-      if (e.shiftKey) {
-        const currentReplyAnnotations = annotations.filter((ann: Annotation) => ann.replyId === replyId);
-        const activeAnnotation = currentReplyAnnotations.find((ann: Annotation) => ann.id === activeAnnotationId);
-        const overlappingAnnotations = currentReplyAnnotations.filter((ann: Annotation) => annotationOverlapsSelection(ann, startIndex, endIndex));
-        const targetAnnotation = activeAnnotation ?? (overlappingAnnotations.length === 1 ? overlappingAnnotations[0] : null);
+      if (event.shiftKey) {
+        const currentReplyAnnotations = annotations.filter((annotation) => annotation.replyId === replyId);
+        const activeAnnotation = currentReplyAnnotations.find((annotation) => annotation.id === activeAnnotationId);
+        const targetAnnotation = activeAnnotation ?? null;
 
         if (!targetAnnotation) {
           selection.removeAllRanges();
@@ -488,24 +1065,20 @@ const ReplyPanel = ({ replyId, text, title, wordCount, annotations, activeTab, s
           const updatedRanges = normalizeRanges(
             [
               ...targetAnnotation.ranges,
-              createAnnotationRange(startIndex, endIndex, sourceText),
+              createAnnotationRange(normalizedStart, normalizedEnd, sourceText),
             ],
             sourceText,
           );
 
-          handleUpdateAnnotation(targetAnnotation.id, {
-            ranges: updatedRanges,
-          });
+          handleUpdateAnnotation(targetAnnotation.id, { ranges: updatedRanges });
           setActiveAnnotationId(targetAnnotation.id);
         } else {
-          const updatedRanges = removeSelectionFromRanges(targetAnnotation.ranges, startIndex, endIndex, sourceText);
+          const updatedRanges = removeSelectionFromRanges(targetAnnotation.ranges, normalizedStart, normalizedEnd, sourceText);
 
           if (!updatedRanges.length) {
             handleDelete(targetAnnotation.id);
           } else {
-            handleUpdateAnnotation(targetAnnotation.id, {
-              ranges: updatedRanges,
-            });
+            handleUpdateAnnotation(targetAnnotation.id, { ranges: updatedRanges });
             setActiveAnnotationId(targetAnnotation.id);
           }
         }
@@ -521,15 +1094,15 @@ const ReplyPanel = ({ replyId, text, title, wordCount, annotations, activeTab, s
       }
 
       const rect = range.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
+      const position = clampFloatingPosition(rect.left, rect.bottom + 8);
 
       setDraft({
         replyId,
-        startIndex,
-        endIndex,
-        text: selectedText,
-        top: rect.bottom - containerRect.top + container.scrollTop + 8,
-        left: rect.left - containerRect.left + container.scrollLeft,
+        startIndex: normalizedStart,
+        endIndex: normalizedEnd,
+        text: sourceText.slice(normalizedStart, normalizedEnd),
+        top: position.top,
+        left: position.left,
         type: '事实性错误',
         subType: '',
         reason: '',
@@ -538,95 +1111,96 @@ const ReplyPanel = ({ replyId, text, title, wordCount, annotations, activeTab, s
   };
 
   return (
-    <div className="flex-1 flex bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden min-w-0">
-      <div className="flex-1 flex flex-col min-w-0 border-r border-gray-200 relative">
-        <div className="px-4 py-2 border-b border-gray-200 bg-gray-50 flex justify-between items-center shrink-0">
+    <div className="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+      <div className="relative flex min-w-0 flex-1 flex-col border-r border-gray-200">
+        <div className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-gray-50 px-4 py-2">
           <div className="flex items-center gap-2">
-            <span className="font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded text-sm">{title}</span>
+            <span className="rounded bg-blue-100 px-2 py-0.5 text-sm font-medium text-blue-700">{title}</span>
             <span className="text-xs text-gray-500">{wordCount}字</span>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500">渲染</span>
-            <div className="w-8 h-4 bg-blue-500 rounded-full relative"><div className="absolute right-0.5 top-0.5 w-3 h-3 bg-white rounded-full"></div></div>
-          </div>
         </div>
-        
-        <div 
+
+        <div
           ref={containerRef}
-          className="flex-1 overflow-y-auto p-6 relative"
+          className="relative flex-1 overflow-y-auto p-6"
+          style={{ cursor: getTextCanvasCursor(mode, isShiftPressed, shiftCursorHint) }}
           onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
         >
-          <HighlightedText 
-            text={text} 
-            replyId={replyId}
-            annotations={annotations} 
+          <HighlightedText
+            text={text}
+            segments={segments}
+            annotationsById={annotationsById}
             activeAnnotationId={activeAnnotationId}
-            onHighlightClick={(ann: Annotation) => {
-              setActiveAnnotationId(ann.id);
-              setActiveTab('annotate');
-            }}
-            onHighlightHover={onHighlightHover}
+            onAnnotationClick={onFocusAnnotation}
+            onSegmentHover={onSegmentHover}
+            onSegmentLeave={onSegmentLeave}
+            onOverlapLabelHover={onOverlapLabelHover}
+            onOverlapLabelLeave={onOverlapLabelLeave}
+            onOverlapLabelClick={onOverlapLabelClick}
           />
-          
-          {draft && draft.replyId === replyId && (
-            <DraftPopover 
-              draft={draft} 
-              setDraft={setDraft} 
-              onSave={onSaveDraft} 
+
+          {draft && draft.replyId === replyId ? (
+            <DraftPopover
+              draft={draft}
+              setDraft={setDraft}
+              onSave={onSaveDraft}
               onCancel={() => {
                 setDraft(null);
                 window.getSelection()?.removeAllRanges();
-              }} 
+              }}
             />
-          )}
+          ) : null}
         </div>
       </div>
 
-      <div className="w-[340px] flex flex-col shrink-0 min-h-0 bg-gray-50 overflow-hidden">
-        <div className="flex border-b border-gray-200 shrink-0">
-          <button 
-            className={`flex-1 py-3 text-sm font-medium border-b-2 ${activeTab === 'overall' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-600 hover:bg-gray-100'}`}
+      <div className="flex w-[360px] min-h-0 shrink-0 flex-col overflow-hidden bg-gray-50">
+        <div className="flex shrink-0 border-b border-gray-200">
+          <button
+            className={`flex-1 border-b-2 py-3 text-sm font-medium ${activeTab === 'overall' ? 'border-blue-600 bg-white text-blue-600' : 'border-transparent text-gray-600 hover:bg-gray-100'}`}
             onClick={() => setActiveTab('overall')}
           >
             标注表单
           </button>
-          <button 
-            className={`flex-1 py-3 text-sm font-medium border-b-2 ${activeTab === 'annotate' ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-600 hover:bg-gray-100'}`}
+          <button
+            className={`flex-1 border-b-2 py-3 text-sm font-medium ${activeTab === 'annotate' ? 'border-blue-600 bg-white text-blue-600' : 'border-transparent text-gray-600 hover:bg-gray-100'}`}
             onClick={() => setActiveTab('annotate')}
           >
-            文本标注列表 ({annotations.filter((a: Annotation) => a.replyId === replyId).length})
+            文本标注列表 ({annotations.filter((annotation) => annotation.replyId === replyId).length})
           </button>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+        <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
           {activeTab === 'overall' ? (
-            <div className="p-4 overflow-y-auto">
+            <div className="overflow-y-auto p-4">
               <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2"><span className="text-red-500">*</span> 排序原因</label>
-                <textarea className="w-full border border-gray-300 rounded-md p-2 text-sm h-32 resize-none focus:ring-1 focus:ring-blue-500 outline-none" placeholder="请输入排序原因..."></textarea>
+                <label className="mb-2 block text-sm font-medium text-gray-700"><span className="text-red-500">*</span> 排序原因</label>
+                <textarea className="h-32 w-full resize-none rounded-md border border-gray-300 p-2 text-sm outline-none focus:ring-1 focus:ring-blue-500" placeholder="请输入排序原因..."></textarea>
               </div>
               <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">对{title}的整体评价</label>
-                <textarea className="w-full border border-gray-300 rounded-md p-2 text-sm h-24 resize-none focus:ring-1 focus:ring-blue-500 outline-none" placeholder="请输入评价..."></textarea>
+                <label className="mb-2 block text-sm font-medium text-gray-700">对{title}的整体评价</label>
+                <textarea className="h-24 w-full resize-none rounded-md border border-gray-300 p-2 text-sm outline-none focus:ring-1 focus:ring-blue-500" placeholder="请输入评价..."></textarea>
               </div>
             </div>
           ) : (
-            <AnnotationSidebar 
+            <AnnotationSidebar
               replyId={replyId}
               annotations={annotations}
               activeAnnotationId={activeAnnotationId}
               setActiveAnnotationId={setActiveAnnotationId}
-              handleLocate={handleLocate}
               handleDelete={handleDelete}
               handleUpdateAnnotation={handleUpdateAnnotation}
+              handleToggleHidden={handleToggleHidden}
+              filter={annotationFilter}
+              setFilter={setAnnotationFilter}
             />
           )}
         </div>
       </div>
     </div>
   );
-};
+}
 
 export default function App() {
   const [mode, setMode] = useState<'normal' | 'annotate'>('annotate');
@@ -635,9 +1209,14 @@ export default function App() {
   const [activeTab2, setActiveTab2] = useState<'overall' | 'annotate'>('overall');
   const [draft, setDraft] = useState<DraftAnnotation | null>(null);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
-  const [hoveredAnn, setHoveredAnn] = useState<{ annotationId: string, clientX: number, clientY: number } | null>(null);
+  const [annotationDisplayOrder, setAnnotationDisplayOrder] = useState<string[]>(() => INITIAL_ANNOTATIONS.map((annotation) => annotation.id));
+  const [overlapPopover, setOverlapPopover] = useState<OverlapPopoverState | null>(null);
+  const [editorPopover, setEditorPopover] = useState<EditorPopoverState | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
-  const hoverCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isShiftPressed, setIsShiftPressed] = useState(false);
+  const dragPopoverStateRef = useRef<DragPopoverState | null>(null);
+  const suspendedPopoversRef = useRef<SuspendedPopoversState | null>(null);
+  const shiftPopoverSuspendedRef = useRef(false);
 
   const isEditableTarget = (target: EventTarget | null) => {
     if (!(target instanceof HTMLElement)) return false;
@@ -645,44 +1224,158 @@ export default function App() {
     return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || target.isContentEditable;
   };
 
-  const clearHoverCloseTimeout = () => {
-    if (hoverCloseTimeoutRef.current) {
-      clearTimeout(hoverCloseTimeoutRef.current);
-      hoverCloseTimeoutRef.current = null;
+  const reply1Annotations = annotations.filter((annotation) => annotation.replyId === 'reply1');
+  const reply2Annotations = annotations.filter((annotation) => annotation.replyId === 'reply2');
+  const visibleReply1Annotations = reply1Annotations.filter((annotation) => !annotation.hidden);
+  const visibleReply2Annotations = reply2Annotations.filter((annotation) => !annotation.hidden);
+  const reply1Segments = buildTextSegments(REPLY_1, 'reply1', visibleReply1Annotations, annotationDisplayOrder);
+  const reply2Segments = buildTextSegments(REPLY_2, 'reply2', visibleReply2Annotations, annotationDisplayOrder);
+  const allSegments = [...reply1Segments, ...reply2Segments];
+  const segmentByKey = Object.fromEntries(allSegments.map((segment) => [segment.key, segment]));
+  const annotationById = Object.fromEntries(annotations.map((annotation) => [annotation.id, annotation]));
+  const displayIndexMap = getDisplayIndexMap(annotations);
+  const overlapSegment = overlapPopover ? segmentByKey[overlapPopover.segmentKey] : null;
+  const editorAnnotation = editorPopover ? annotationById[editorPopover.annotationId] ?? null : null;
+
+  useEffect(() => {
+    setAnnotationDisplayOrder((currentOrder) => {
+      const existingIds = new Set(annotations.map((annotation) => annotation.id));
+      const preservedOrder = currentOrder.filter((annotationId) => existingIds.has(annotationId));
+      const newIds = annotations
+        .map((annotation) => annotation.id)
+        .filter((annotationId) => !preservedOrder.includes(annotationId));
+      return [...newIds.reverse(), ...preservedOrder];
+    });
+  }, [annotations]);
+
+  useEffect(() => {
+    if (mode !== 'normal') return;
+
+    setDraft(null);
+    setOverlapPopover(null);
+    setEditorPopover(null);
+    setActiveAnnotationId(null);
+    suspendedPopoversRef.current = null;
+    shiftPopoverSuspendedRef.current = false;
+    dragPopoverStateRef.current = null;
+    window.getSelection()?.removeAllRanges();
+  }, [mode]);
+
+  const focusAnnotation = (annotation: Annotation) => {
+    setActiveAnnotationId(annotation.id);
+    if (annotation.replyId === 'reply1') {
+      setActiveTab1('annotate');
+    } else {
+      setActiveTab2('annotate');
     }
   };
 
-  const scheduleHoverClose = () => {
-    clearHoverCloseTimeout();
-    hoverCloseTimeoutRef.current = setTimeout(() => {
-      setHoveredAnn(null);
-    }, 140);
-  };
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const dragState = dragPopoverStateRef.current;
+      if (!dragState) return;
 
-  const hideHoveredAnnotation = () => {
-    clearHoverCloseTimeout();
-    setHoveredAnn(null);
-  };
+      const nextPosition = clampFloatingPosition(
+        event.clientX - dragState.offsetX,
+        event.clientY - dragState.offsetY,
+        dragState.width,
+        dragState.height,
+      );
+
+      if (dragState.kind === 'overlap') {
+        setOverlapPopover((currentPopover) => (
+          currentPopover ? { ...currentPopover, ...nextPosition } : currentPopover
+        ));
+        return;
+      }
+
+      setEditorPopover((currentPopover) => (
+        currentPopover ? { ...currentPopover, ...nextPosition } : currentPopover
+      ));
+    };
+
+    const handlePointerEnd = (event: PointerEvent) => {
+      if (dragPopoverStateRef.current?.pointerId !== event.pointerId) return;
+      dragPopoverStateRef.current = null;
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerEnd);
+    window.addEventListener('pointercancel', handlePointerEnd);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerEnd);
+      window.removeEventListener('pointercancel', handlePointerEnd);
+    };
+  }, []);
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isSpaceToggleEvent(event) && !event.repeat && !isEditableTarget(event.target)) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (document.activeElement instanceof HTMLButtonElement) {
+          document.activeElement.blur();
+        }
+        setMode((currentMode) => (currentMode === 'annotate' ? 'normal' : 'annotate'));
+        return;
+      }
+
+      if (event.key === 'Shift' && !shiftPopoverSuspendedRef.current) {
+        setIsShiftPressed(true);
+        const hasOpenPopover = Boolean(draft || overlapPopover || editorPopover);
+        if (hasOpenPopover) {
+          suspendedPopoversRef.current = { draft, overlapPopover, editorPopover };
+          shiftPopoverSuspendedRef.current = true;
+          setDraft(null);
+          setOverlapPopover(null);
+          setEditorPopover(null);
+        }
+      }
+
+      if (event.key === 'Escape') {
         setDraft(null);
+        setOverlapPopover(null);
+        setEditorPopover(null);
+        dragPopoverStateRef.current = null;
+        suspendedPopoversRef.current = null;
+        shiftPopoverSuspendedRef.current = false;
         window.getSelection()?.removeAllRanges();
         return;
       }
 
-      if (e.key === 'Delete' && activeAnnotationId && !isEditableTarget(e.target)) {
-        e.preventDefault();
+      if (event.key === 'Delete' && activeAnnotationId && !isEditableTarget(event.target)) {
+        event.preventDefault();
         handleDelete(activeAnnotationId);
       }
     };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (isSpaceToggleEvent(event) && !isEditableTarget(event.target)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+
+      setIsShiftPressed(false);
+      if (event.key !== 'Shift' || !shiftPopoverSuspendedRef.current) return;
+      const suspendedPopovers = suspendedPopoversRef.current;
+      shiftPopoverSuspendedRef.current = false;
+      suspendedPopoversRef.current = null;
+      if (!suspendedPopovers) return;
+
+      setDraft(suspendedPopovers.draft);
+      setOverlapPopover(suspendedPopovers.overlapPopover);
+      setEditorPopover(suspendedPopovers.editorPopover);
+    };
+
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
-      clearHoverCloseTimeout();
+      window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [activeAnnotationId]);
+  }, [activeAnnotationId, draft, overlapPopover, editorPopover]);
 
   useEffect(() => {
     if (!draft) return;
@@ -695,10 +1388,36 @@ export default function App() {
     };
 
     document.addEventListener('mousedown', handleDocumentMouseDown, true);
-    return () => {
-      document.removeEventListener('mousedown', handleDocumentMouseDown, true);
-    };
+    return () => document.removeEventListener('mousedown', handleDocumentMouseDown, true);
   }, [draft]);
+
+  useEffect(() => {
+    if (!overlapPopover) return;
+
+    const handleDocumentMouseDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest('.overlap-popover') || target.closest('.overlap-pill')) return;
+      setOverlapPopover(null);
+    };
+
+    document.addEventListener('mousedown', handleDocumentMouseDown, true);
+    return () => document.removeEventListener('mousedown', handleDocumentMouseDown, true);
+  }, [overlapPopover]);
+
+  useEffect(() => {
+    if (!editorPopover) return;
+
+    const handleDocumentMouseDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest('.annotation-editor-popover')) return;
+      setEditorPopover(null);
+    };
+
+    document.addEventListener('mousedown', handleDocumentMouseDown, true);
+    return () => document.removeEventListener('mousedown', handleDocumentMouseDown, true);
+  }, [editorPopover]);
 
   useEffect(() => {
     if (!activeAnnotationId) return;
@@ -708,20 +1427,31 @@ export default function App() {
 
       const target = event.target;
       if (!(target instanceof Element)) return;
-      if (target.closest(`[data-annotation-id="${activeAnnotationId}"]`)) return;
+      if (target.closest(`[data-annotation-id="${activeAnnotationId}"]`) || target.closest(`[data-highlight-ids~="${activeAnnotationId}"]`)) return;
 
       setActiveAnnotationId(null);
     };
 
     document.addEventListener('mousedown', handleDocumentMouseDown, true);
-    return () => {
-      document.removeEventListener('mousedown', handleDocumentMouseDown, true);
-    };
+    return () => document.removeEventListener('mousedown', handleDocumentMouseDown, true);
   }, [activeAnnotationId]);
+
+  useEffect(() => {
+    if (!overlapPopover) return;
+    if (overlapSegment?.isOverlap) return;
+    setOverlapPopover(null);
+  }, [overlapPopover, overlapSegment]);
+
+  useEffect(() => {
+    if (!editorPopover) return;
+    if (editorAnnotation) return;
+    setEditorPopover(null);
+  }, [editorPopover, editorAnnotation]);
 
   const handleSaveDraft = () => {
     if (!draft) return;
-    const newAnn = normalizeAnnotation({
+
+    const newAnnotation = normalizeAnnotation({
       id: `a${Date.now()}`,
       replyId: draft.replyId,
       startIndex: draft.startIndex,
@@ -731,211 +1461,312 @@ export default function App() {
       type: draft.type,
       subType: draft.subType,
       reason: draft.reason,
-      severity: '中'
+      severity: '中',
     });
-    setAnnotations((currentAnnotations) => [...currentAnnotations, newAnn]);
+
+    setAnnotations((currentAnnotations) => [...currentAnnotations, newAnnotation]);
     setDraft(null);
     window.getSelection()?.removeAllRanges();
-    
-    if (draft.replyId === 'reply1') setActiveTab1('annotate');
-    else setActiveTab2('annotate');
-    
-    setActiveAnnotationId(newAnn.id);
-  };
 
-  const handleLocate = (ann: Annotation) => {
-    const highlightElements = ann.ranges
-      .map((_, index) => document.getElementById(`highlight-${ann.id}-${index}`))
-      .filter((element): element is HTMLElement => element instanceof HTMLElement);
+    if (draft.replyId === 'reply1') {
+      setActiveTab1('annotate');
+    } else {
+      setActiveTab2('annotate');
+    }
 
-    const firstHighlightElement = highlightElements[0];
-    if (!firstHighlightElement) return;
-
-    firstHighlightElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    highlightElements.forEach((element) => {
-      element.classList.add('ring-4', 'ring-blue-400', 'ring-opacity-50');
-    });
-
-    setTimeout(() => {
-      highlightElements.forEach((element) => {
-        element.classList.remove('ring-4', 'ring-blue-400', 'ring-opacity-50');
-      });
-    }, 1500);
+    setActiveAnnotationId(newAnnotation.id);
   };
 
   const handleDelete = (id: string) => {
-    setAnnotations((currentAnnotations) => currentAnnotations.filter(a => a.id !== id));
-    if (activeAnnotationId === id) setActiveAnnotationId(null);
-    if (hoveredAnn?.annotationId === id) setHoveredAnn(null);
+    setAnnotations((currentAnnotations) => currentAnnotations.filter((annotation) => annotation.id !== id));
+    setActiveAnnotationId((currentActive) => (currentActive === id ? null : currentActive));
+    setEditorPopover((currentPopover) => (currentPopover?.annotationId === id ? null : currentPopover));
   };
 
   const handleUpdateAnnotation = (id: string, updates: Partial<Annotation>) => {
-    setAnnotations((currentAnnotations) => currentAnnotations.map(a => a.id === id ? normalizeAnnotation({ ...a, ...updates }) : a));
+    setAnnotations((currentAnnotations) => currentAnnotations.map((annotation) => (
+      annotation.id === id ? normalizeAnnotation({ ...annotation, ...updates }) : annotation
+    )));
     setActiveAnnotationId(id);
   };
 
-  const handleHighlightHover = (e: React.MouseEvent | null, ann: Annotation | null) => {
-    if (e && ann) {
-      clearHoverCloseTimeout();
-      setHoveredAnn({
-        annotationId: ann.id,
-        clientX: e.clientX,
-        clientY: e.clientY,
-      });
+  const handleToggleHidden = (id: string) => {
+    setAnnotations((currentAnnotations) => currentAnnotations.map((annotation) => (
+      annotation.id === id ? normalizeAnnotation({ ...annotation, hidden: !annotation.hidden }) : annotation
+    )));
+    setActiveAnnotationId(id);
+  };
+
+  const handleOverlapLabelClick = (event: React.MouseEvent<HTMLButtonElement>, segment: TextSegment) => {
+    event.stopPropagation();
+    if (overlapPopover?.segmentKey === segment.key) {
+      setOverlapPopover(null);
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    setOverlapPopover({
+      segmentKey: segment.key,
+      ...clampFloatingPosition(rect.left - 20, rect.bottom + 8, 360, 420),
+    });
+  };
+
+  const startDraggingPopover = (
+    kind: DragPopoverState['kind'],
+    event: React.PointerEvent<HTMLDivElement>,
+  ) => {
+    if (event.button !== 0) return;
+
+    const popoverElement = event.currentTarget.parentElement;
+    if (!(popoverElement instanceof HTMLElement)) return;
+
+    const rect = popoverElement.getBoundingClientRect();
+    dragPopoverStateRef.current = {
+      kind,
+      pointerId: event.pointerId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const handleHighlightClick = (event: React.MouseEvent<HTMLSpanElement>, annotation: Annotation) => {
+    setActiveAnnotationId(annotation.id);
+    if (annotation.replyId === 'reply1') {
+      setActiveTab1('annotate');
     } else {
-      scheduleHoverClose();
+      setActiveTab2('annotate');
+    }
+
+    setOverlapPopover(null);
+    setEditorPopover({
+      annotationId: annotation.id,
+      ...getFloatingPosition(event.clientX, event.clientY, 340, 360),
+    });
+  };
+
+  const handleSetSegmentPrimary = (currentPrimaryId: string | null, annotationId: string) => {
+    setAnnotationDisplayOrder((currentOrder) => {
+      if (currentPrimaryId === annotationId) return currentOrder;
+
+      const nextOrder = currentOrder.filter((currentId) => currentId !== annotationId);
+      if (!currentPrimaryId) {
+        return [annotationId, ...nextOrder];
+      }
+
+      const targetIndex = nextOrder.indexOf(currentPrimaryId);
+      if (targetIndex === -1) {
+        return [annotationId, ...nextOrder];
+      }
+
+      nextOrder.splice(targetIndex, 0, annotationId);
+      return nextOrder;
+    });
+    const annotation = annotationById[annotationId];
+    if (annotation) {
+      focusAnnotation(annotation);
     }
   };
 
-  const hoveredAnnotation = hoveredAnn ? annotations.find((ann) => ann.id === hoveredAnn.annotationId) ?? null : null;
-  const hoveredAnnotationPosition = hoveredAnn ? getHoverCardPosition(hoveredAnn.clientX, hoveredAnn.clientY) : null;
-  const hoveredAnnotationDisplayIndex = hoveredAnnotation ? getAnnotationDisplayIndex(hoveredAnnotation, annotations) : null;
-
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col font-sans">
-      <header className="bg-white border-b border-gray-200 px-4 py-3 flex justify-between items-center shrink-0 shadow-sm">
+    <div className="flex min-h-screen flex-col bg-gray-100 font-sans">
+      <header className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-4 py-3 shadow-sm">
         <div className="flex items-center gap-4">
-          <h1 className="font-bold text-lg text-gray-800">全职体感测_rl_2603</h1>
-          <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">第3题/4 标注4 跳过0</span>
+          <h1 className="text-lg font-bold text-gray-800">全职体感测_rl_2603</h1>
+          <span className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-500">第3题/4 标注7 跳过0</span>
         </div>
         <div className="flex items-center gap-6">
-          <div className="font-mono text-lg bg-blue-50 text-blue-700 px-4 py-1 rounded-full font-bold border border-blue-100">00:02:19</div>
-          <div className="flex items-center gap-4 border-l pl-4 border-gray-200">
-            <div className="flex bg-gray-100 p-1 rounded-lg">
-              <button 
-                className={`px-3 py-1 text-sm font-medium rounded-md transition-all ${mode === 'normal' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-800'}`} 
-                onClick={() => setMode('normal')}
-              >
-                普通模式
-              </button>
-              <button 
-                className={`px-3 py-1 text-sm font-medium rounded-md transition-all ${mode === 'annotate' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-800'}`} 
-                onClick={() => setMode('annotate')}
-              >
-                批注模式
-              </button>
-            </div>
-            <button onClick={() => setShowShortcuts(true)} className="text-sm text-gray-500 hover:text-gray-800 flex items-center gap-1 transition-colors"><AlertCircle size={16}/> 快捷键</button>
-            <div className="text-sm text-emerald-600 flex items-center gap-1 font-medium"><Check size={16}/> 已自动保存</div>
+          <div className="rounded-full border border-blue-100 bg-blue-50 px-4 py-1 font-mono text-lg font-bold text-blue-700">00:02:19</div>
+          <div className="flex items-center gap-4 border-l border-gray-200 pl-4">
+            <button onClick={() => setShowShortcuts(true)} className="flex items-center gap-1 text-sm text-gray-500 transition-colors hover:text-gray-800"><AlertCircle size={16}/> 快捷键</button>
+            <div className="flex items-center gap-1 text-sm font-medium text-emerald-600"><Check size={16}/> 已自动保存</div>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button className="px-3 py-1.5 text-sm border border-gray-200 rounded text-gray-600 hover:bg-gray-50 flex items-center gap-1 transition-colors"><ChevronLeft size={16}/> 上一题</button>
-          <button className="px-3 py-1.5 text-sm border border-gray-200 rounded text-gray-600 hover:bg-gray-50 flex items-center gap-1 transition-colors">下一题 <ChevronRight size={16}/></button>
+          <button className="flex items-center gap-1 rounded border border-gray-200 px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50"><ChevronLeft size={16}/> 上一题</button>
+          <button className="flex items-center gap-1 rounded border border-gray-200 px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50">下一题 <ChevronRight size={16}/></button>
         </div>
       </header>
 
-      <div className="p-4 shrink-0">
-        <div className="bg-white border border-purple-200 rounded-lg p-4 shadow-sm">
-          <div className="flex items-center gap-2 mb-2 text-purple-800 font-medium text-sm">
-            <span className="bg-purple-100 px-2 py-0.5 rounded text-xs border border-purple-200">指示</span>
+      <div className="shrink-0 p-4">
+        <div className="rounded-lg border border-sky-200 bg-white p-4 shadow-sm">
+          <div className="mb-2 flex items-center gap-2 text-sm font-medium text-sky-800">
+            <span className="rounded border border-sky-200 bg-sky-100 px-2 py-0.5 text-xs">指示</span>
             22字
           </div>
           <p className="text-gray-800">{PROMPT}</p>
         </div>
       </div>
 
-      <div className="flex-1 flex gap-4 px-4 pb-4 min-h-0">
-        <ReplyPanel 
+      <div className="flex flex-1 gap-4 px-4 pb-4 min-h-0">
+        <ReplyPanel
           replyId="reply1"
           text={REPLY_1}
           title="回复1"
           wordCount={1050}
           annotations={annotations}
+          segments={reply1Segments}
           activeTab={activeTab1}
           setActiveTab={setActiveTab1}
           mode={mode}
           draft={draft}
           setDraft={setDraft}
           activeAnnotationId={activeAnnotationId}
-          setActiveAnnotationId={(id: string | null) => {
+          setActiveAnnotationId={(id) => {
             setActiveAnnotationId(id);
             if (id) setActiveTab1('annotate');
           }}
-          handleLocate={handleLocate}
           handleDelete={handleDelete}
           handleUpdateAnnotation={handleUpdateAnnotation}
+          handleToggleHidden={handleToggleHidden}
           onSaveDraft={handleSaveDraft}
-          onHighlightHover={handleHighlightHover}
-          onTextMouseDown={hideHoveredAnnotation}
+          onFocusAnnotation={handleHighlightClick}
+          onSegmentHover={() => {}}
+          onSegmentLeave={() => {}}
+          onOverlapLabelHover={() => {}}
+          onOverlapLabelLeave={() => {}}
+          onOverlapLabelClick={handleOverlapLabelClick}
+          onTextMouseDown={(event) => {
+            if (event.shiftKey) {
+              collapseSelectionToPoint(event.clientX, event.clientY);
+              return;
+            }
+          }}
+          isShiftPressed={isShiftPressed}
         />
-        
-        <ReplyPanel 
+
+        <ReplyPanel
           replyId="reply2"
           text={REPLY_2}
           title="回复2"
           wordCount={987}
           annotations={annotations}
+          segments={reply2Segments}
           activeTab={activeTab2}
           setActiveTab={setActiveTab2}
           mode={mode}
           draft={draft}
           setDraft={setDraft}
           activeAnnotationId={activeAnnotationId}
-          setActiveAnnotationId={(id: string | null) => {
+          setActiveAnnotationId={(id) => {
             setActiveAnnotationId(id);
             if (id) setActiveTab2('annotate');
           }}
-          handleLocate={handleLocate}
           handleDelete={handleDelete}
           handleUpdateAnnotation={handleUpdateAnnotation}
+          handleToggleHidden={handleToggleHidden}
           onSaveDraft={handleSaveDraft}
-          onHighlightHover={handleHighlightHover}
-          onTextMouseDown={hideHoveredAnnotation}
+          onFocusAnnotation={handleHighlightClick}
+          onSegmentHover={() => {}}
+          onSegmentLeave={() => {}}
+          onOverlapLabelHover={() => {}}
+          onOverlapLabelLeave={() => {}}
+          onOverlapLabelClick={handleOverlapLabelClick}
+          onTextMouseDown={(event) => {
+            if (event.shiftKey) {
+              collapseSelectionToPoint(event.clientX, event.clientY);
+              return;
+            }
+          }}
+          isShiftPressed={isShiftPressed}
         />
       </div>
 
-      {hoveredAnnotation && hoveredAnnotationPosition && (
-        <HoverEditorPopover
-          annotation={hoveredAnnotation}
-          displayIndex={hoveredAnnotationDisplayIndex}
-          position={hoveredAnnotationPosition}
-          onMouseEnter={clearHoverCloseTimeout}
-          onMouseLeave={scheduleHoverClose}
-          onDelete={handleDelete}
-          handleUpdateAnnotation={handleUpdateAnnotation}
+      {overlapPopover && overlapSegment ? (
+        <OverlapPopover
+          segment={overlapSegment}
+          annotations={overlapSegment.annotationIds.map((id) => annotationById[id]).filter(Boolean)}
+          displayIndexMap={displayIndexMap}
+          position={{ left: overlapPopover.left, top: overlapPopover.top }}
+          onClose={() => setOverlapPopover(null)}
+          onSetPrimary={handleSetSegmentPrimary}
+          onUpdateAnnotation={handleUpdateAnnotation}
+          onDelete={(annotationId) => {
+            handleDelete(annotationId);
+            setOverlapPopover(null);
+          }}
+          onDragStart={(event) => startDraggingPopover('overlap', event)}
         />
-      )}
+      ) : null}
 
-      {showShortcuts && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center" onClick={() => setShowShortcuts(false)}>
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-96" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-4">
+      {editorPopover && editorAnnotation ? (
+        <AnnotationEditorPopover
+          annotation={editorAnnotation}
+          displayIndex={displayIndexMap[editorAnnotation.id]}
+          position={{ left: editorPopover.left, top: editorPopover.top }}
+          onClose={() => setEditorPopover(null)}
+          onDelete={(annotationId) => handleDelete(annotationId)}
+          onUpdateAnnotation={handleUpdateAnnotation}
+          onDragStart={(event) => startDraggingPopover('editor', event)}
+        />
+      ) : null}
+
+      {showShortcuts ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowShortcuts(false)}>
+          <div className="w-[460px] rounded-xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-800">快捷键提示</h2>
               <button onClick={() => setShowShortcuts(false)} className="text-gray-400 hover:text-gray-600"><X size={20}/></button>
             </div>
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between border-b border-gray-100 pb-2">
-                <span className="text-gray-600">事实性错误</span>
-                <kbd className="bg-gray-100 border border-gray-200 rounded px-2 py-0.5 font-mono text-gray-600">1</kbd>
+            <div className="space-y-5 text-sm">
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">模式切换</div>
+                <div className="flex justify-between border-b border-gray-100 pb-2">
+                  <span className="text-gray-600">普通模式 / 批注模式切换</span>
+                  <kbd className="rounded border border-gray-200 bg-gray-100 px-2 py-0.5 font-mono text-gray-600">Space</kbd>
+                </div>
               </div>
-              <div className="flex justify-between border-b border-gray-100 pb-2">
-                <span className="text-gray-600">推理错误</span>
-                <kbd className="bg-gray-100 border border-gray-200 rounded px-2 py-0.5 font-mono text-gray-600">2</kbd>
+
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">标注编辑</div>
+                <div className="flex justify-between border-b border-gray-100 pb-2">
+                  <span className="text-gray-600">先选中标注后追加范围</span>
+                  <kbd className="rounded border border-gray-200 bg-gray-100 px-2 py-0.5 font-mono text-gray-600">Shift + 正向画选</kbd>
+                </div>
+                <div className="mt-3 flex justify-between border-b border-gray-100 pb-2">
+                  <span className="text-gray-600">先选中标注后移除范围</span>
+                  <kbd className="rounded border border-gray-200 bg-gray-100 px-2 py-0.5 font-mono text-gray-600">Shift + 反向画选</kbd>
+                </div>
+                <div className="mt-3 flex justify-between border-b border-gray-100 pb-2">
+                  <span className="text-gray-600">删除当前选中标注</span>
+                  <kbd className="rounded border border-gray-200 bg-gray-100 px-2 py-0.5 font-mono text-gray-600">Delete</kbd>
+                </div>
               </div>
-              <div className="flex justify-between border-b border-gray-100 pb-2">
-                <span className="text-gray-600">情感表达错误</span>
-                <kbd className="bg-gray-100 border border-gray-200 rounded px-2 py-0.5 font-mono text-gray-600">3</kbd>
+
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">浮窗操作</div>
+                <div className="flex justify-between border-b border-gray-100 pb-2">
+                  <span className="text-gray-600">关闭草稿 / 编辑窗 / 重叠窗</span>
+                  <kbd className="rounded border border-gray-200 bg-gray-100 px-2 py-0.5 font-mono text-gray-600">Esc</kbd>
+                </div>
+                <div className="mt-3 flex justify-between border-b border-gray-100 pb-2">
+                  <span className="text-gray-600">按住 Shift 时临时隐藏浮窗</span>
+                  <kbd className="rounded border border-gray-200 bg-gray-100 px-2 py-0.5 font-mono text-gray-600">按下 / 松开 Shift</kbd>
+                </div>
+                <div className="mt-3 flex justify-between border-b border-gray-100 pb-2">
+                  <span className="text-gray-600">拖动浮窗位置</span>
+                  <kbd className="rounded border border-gray-200 bg-gray-100 px-2 py-0.5 font-mono text-gray-600">拖动浮窗顶部</kbd>
+                </div>
               </div>
-              <div className="flex justify-between border-b border-gray-100 pb-2">
-                <span className="text-gray-600">保存标注</span>
-                <kbd className="bg-gray-100 border border-gray-200 rounded px-2 py-0.5 font-mono text-gray-600">Enter</kbd>
-              </div>
-              <div className="flex justify-between border-b border-gray-100 pb-2">
-                <span className="text-gray-600">取消标注</span>
-                <kbd className="bg-gray-100 border border-gray-200 rounded px-2 py-0.5 font-mono text-gray-600">Esc</kbd>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">删除当前问题</span>
-                <kbd className="bg-gray-100 border border-gray-200 rounded px-2 py-0.5 font-mono text-gray-600">Delete</kbd>
+
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">使用说明</div>
+                <div className="space-y-2 text-xs leading-relaxed text-gray-600">
+                  <div>批注模式下直接拖选文本可新建标注；新建标注保存后会默认成为主显示。</div>
+                  <div>点击正文高亮可打开该标注的编辑悬浮窗；点击重叠数字可展开当前片段的全部重叠标注。</div>
+                  <div>“设为主显示”调整的是标注在当前显示层级中的顺序，不会把被中间片段截断的前后部分拆开单独设置。</div>
+                  <div>普通模式下会关闭所有草稿、编辑窗、重叠窗，并取消当前选中高亮。</div>
+                </div>
               </div>
             </div>
             <div className="mt-6 text-center">
-              <button onClick={() => setShowShortcuts(false)} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium w-full">我知道了</button>
+              <button onClick={() => setShowShortcuts(false)} className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">我知道了</button>
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
